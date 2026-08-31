@@ -1,0 +1,55 @@
+{
+  "name": "@krosskinetic/pi-apply-job",
+  "version": "0.3.0",
+  "description": "Evidence-backed job application and resume-tailoring workflow for Pi",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "job-search",
+    "resume",
+    "latex"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/KrossKinetic/pi-apply-job#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KrossKinetic/pi-apply-job.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KrossKinetic/pi-apply-job/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typebox": "^1.3.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "check": "npm run typecheck",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run check"
+  }
+}

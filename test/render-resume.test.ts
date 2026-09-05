@@ -1,82 +1,48 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { renderResume } from "../extensions/render-resume.js";
-import { createInitialMetadata, ensureWorkspace, getWorkspace, saveMetadata, writeJsonFile, writeTextFile } from "../extensions/utils.js";
+import { planFixture, setup } from "./fixtures.js";
 
-const template = [
-	"\\documentclass[letterpaper,10pt]{article}",
-	"\\usepackage[margin=1.5cm]{geometry}",
-	"\\usepackage{enumitem}",
-	"\\newcommand{\\resumeItem}[1]{\\item\\small{#1}}",
-	"\\newcommand{\\resumeSubheading}[4]{\\item \\textbf{#1} \\hfill #2\\\\ \\textit{#3} \\hfill #4}",
-	"\\newcommand{\\resumeProjectHeading}[2]{\\item \\textbf{#1} \\hfill #2}",
-	"\\newcommand{\\resumeItemListStart}{\\begin{itemize}[leftmargin=0.15in]}",
-	"\\newcommand{\\resumeItemListEnd}{\\end{itemize}}",
-	"\\newcommand{\\resumeSubHeadingListStart}{\\begin{itemize}[leftmargin=0in,label={}]}",
-	"\\newcommand{\\resumeSubHeadingListEnd}{\\end{itemize}}",
-	"\\begin{document}",
-	"%% PI:HEADER",
-	"%% PI:CONTENT",
-	"\\end{document}",
-].join("\n");
+test("compiles blank optional fields but fails sparse visual layout; rejects unknown evidence", async () => {
+  const f = setup();
+  try {
+    f.draft();
+    const result = await renderResume(f.workspace, f.folder);
+    assert.equal(result.pageCount, 1);
+    assert.equal(result.passed, false);
+    assert.ok(result.warnings.some(w=>w.includes("Sparse")));
+    assert.ok(fs.existsSync(path.join(f.folder,"resume-preview.png")));
+    const tex = fs.readFileSync(result.texPath,"utf8");
+    assert.match(tex, /Honors \/ Awards/);
+    assert.match(tex, /Coursework/);
+    assert.ok(!tex.includes("resizebox{"));
+    const plan = planFixture(); plan.sections[0].entries[0].bullets[0].evidence = ["invented-01"]; f.draft(plan);
+    await assert.rejects(renderResume(f.workspace,f.folder),/unknown master-resume evidence ID/);
+  } finally { f.cleanup(); }
+});
 
-test("renders an approved plan and rejects an unknown evidence ID", async () => {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-apply-job-"));
-	try {
-		const workspace = getWorkspace(root);
-		ensureWorkspace(workspace);
-		writeTextFile(path.join(workspace.masterDir, "resume.md"), "# [identity-01] Candidate\\n- [role-01] Supported fact\\n");
-		writeTextFile(path.join(workspace.templateDir, "resume-template.tex"), template);
-		const folder = path.join(workspace.jobsDir, "company", "role-012026");
-		fs.mkdirSync(folder, { recursive: true });
-		saveMetadata(folder, createInitialMetadata("https://jobs.example.com/1", "Company", "Role", "012026"));
-		writeJsonFile(path.join(folder, "verification.json"), { approved: true, issues: [], summary: "Approved." });
-		writeJsonFile(path.join(folder, "resume-plan.json"), {
-			schemaVersion: 1,
-			target: { company: "Company", role: "Role" },
-			header: { name: "Candidate", headline: "Engineer", contactLine: "candidate@example.com", evidence: ["identity-01"] },
-			sections: [{
-				title: "Experience",
-				kind: "entries",
-				entries: [{
-					kind: "standard",
-					title: "Engineer",
-					dates: "2025 - Present",
-					subtitle: "Company",
-					location: "Remote",
-					evidence: ["role-01"],
-					bullets: [{ text: "Built a supported system.", evidence: ["role-01"] }],
-				}],
-			}],
-		});
-		const result = await renderResume(workspace, folder);
-		assert.equal(result.passed, true);
-		assert.equal(result.pageCount, 1);
-		assert.equal(fs.existsSync(result.pdfPath), true);
+test("long skills are reported rather than silently scaled to unreadable text", async () => {
+  const f=setup();
+  try {
+    const plan=planFixture(); plan.skills[0].value="TypeScript, Python, JavaScript, ".repeat(20); f.draft(plan);
+    const result=await renderResume(f.workspace,f.folder);
+    assert.equal(result.passed,false);
+    assert.ok(result.warnings.some(w=>w.includes("Technical Skills") || w.includes("overflowing")));
+  } finally { f.cleanup(); }
+});
 
-		writeJsonFile(path.join(folder, "resume-plan.json"), {
-			schemaVersion: 1,
-			target: { company: "Company", role: "Role" },
-			header: { name: "Candidate", headline: "Engineer", contactLine: "candidate@example.com", evidence: ["identity-01"] },
-			sections: [{
-				title: "Experience",
-				kind: "entries",
-				entries: [{
-					kind: "standard",
-					title: "Engineer",
-					dates: "2025 - Present",
-					subtitle: "Company",
-					location: "Remote",
-					evidence: ["invented-01"],
-					bullets: [{ text: "Built a supported system.", evidence: ["invented-01"] }],
-				}],
-			}],
-		});
-		await assert.rejects(renderResume(workspace, folder), /unknown master-resume evidence ID\(s\): invented-01/);
-	} finally {
-		fs.rmSync(root, { recursive: true, force: true });
-	}
+test("a balanced single-page fixture passes measured layout QA", async () => {
+  const f=setup();
+  try {
+    const plan=planFixture(), entry=plan.sections[0].entries[0];
+    entry.bullets.push({...entry.bullets[0]});
+    for(const b of entry.bullets) b.text="Implemented reliable service components with automated regression tests, deterministic input validation, structured error handling, and documented recovery procedures to support consistent releases across the engineering team.";
+    plan.sections[0].entries=Array.from({length:3},(_,i)=>({...entry,title:`Engineer ${i+1}`}));
+    f.draft(plan);
+    const result=await renderResume(f.workspace,f.folder);
+    assert.equal(result.passed,true,JSON.stringify(result.warnings));
+    assert.equal(result.pageCount,1);
+  } finally { f.cleanup(); }
 });

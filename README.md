@@ -20,19 +20,33 @@ pi install /absolute/path/to/pi-apply-job
 
 ## Required inputs
 
-In the project where applications are managed, run:
+Run this once from any Pi workspace:
 
 ~~~
 /apply-job-init
 ~~~
 
-Before applying to a job, add exactly two private source files. They are
-excluded from the package and should not be committed to a public repository:
+This creates the user-wide private workspace at `~/.pi/apply-job`. Before
+applying to a job, add these private résumé sources. They are excluded from the
+package and should not be committed to a public repository:
 
 ~~~
-.pi/apply-job/master/resume.md
-.pi/apply-job/master/template/resume-template.tex
+~/.pi/apply-job/master/resume.md
+~/.pi/apply-job/master/template/resume-template.tex
 ~~~
+
+For optional cover letters, add Markdown (`.md`) or plain-text (`.txt`) samples
+to this third private source folder:
+
+~~~
+~/.pi/apply-job/master/cover-letter/
+~~~
+
+Use it for prior cover letters, personal writeups, and background notes that
+show your voice, tone, motivations, and story. These are candidate-approved
+sources for the cover-letter workflow; keep them factual and suitable for a
+reviewer to use. Nested folders are supported. Binary documents are ignored, so
+export Word or Google Docs material to Markdown or plain text first.
 
 The Markdown master resume is the sole factual inventory. It may be many pages
 long and should contain every truthful role, bullet, skill, course, project,
@@ -42,8 +56,8 @@ audited.
 The LaTeX template contains presentation only: packages, macros, typography,
 and the PI:HEADER and PI:CONTENT markers. It must not contain candidate facts.
 
-For batch processing, also create a plain-text job task list anywhere in the
-project. It contains the public job-posting URLs to process:
+For batch processing, also create a plain-text job task list anywhere Pi can
+read it. It contains the public job-posting URLs to process:
 
 ~~~
 https://jobs.example.com/role/123,
@@ -59,34 +73,130 @@ is an input list only: the extension never submits applications or clicks Apply.
 /apply-job https://jobs.example.com/role/123
 ~~~
 
+To also create a tailored cover letter after the résumé is finished:
+
+~~~
+/apply-job --cover-letter https://jobs.example.com/role/123
+~~~
+
 For a job task list (comma-separated, one URL per line, or semicolon-separated):
 
 ~~~
 /apply-job-file jobs.txt
 ~~~
 
+Batch mode processes every job through drafting, factual review, quality review,
+rendering, and layout QA without opening a per-job approval dialog. Each passing
+job is saved at `awaiting_approval`; when the batch finishes, review and approve
+them individually with `/apply-job-review <job-folder>`.
+
+Resume or review an existing application without scraping or creating another folder:
+
+~~~
+/apply-job-resume /absolute/path/to/existing/job-folder
+/apply-job-review /absolute/path/to/existing/job-folder
+/apply-job-revise /absolute/path/to/existing/job-folder :: Focus more on supported testing experience
+~~~
+
+Both commands reuse checkpoints only when their input and output hashes still
+match. Changed source facts, plans, previews, reviews, or PDFs invalidate the
+affected checks. Legacy plans are retained under `history/` and migrated by a
+fresh drafter in the same job folder. A per-job coordinator lock prevents
+concurrent resume operations. Interrupted processes can resume after exit.
+
+After all checks pass, `review.html` puts the rendered PDF preview alongside
+selected entries, requirement coverage, excluded alternatives, and factual
+findings. Pi offers **Open review page**, **Approve this version**, **Request a
+revision**, **Lock a selected entry**, and **Review later**. A revision starts
+a fresh bounded drafting/review cycle; locks preserve whole selected entries.
+Approval is tied to the reviewed artifact version. Closing or cancelling the
+dialog leaves the job awaiting approval. Non-interactive runs also stop there.
+The PDF exists for review, but the job is not marked complete until approved.
+
+All workers use the model and thinking level selected in Pi when the command
+starts, including independent factual/quality reviewers and cover-letter workers.
+That pair stays fixed throughout the command's batch and revision loops. There
+is no automatic quality-variant switch or separate `reviewerModel` override.
+Resuming captures Pi's current pair for new workers while reusing valid checkpoints.
+The chosen provider, model, and thinking level are recorded in worker progress
+and `worker-model.json`.
+
 ## Worker architecture
 
 The extension is the deterministic coordinator. For every application it creates
-a fresh, in-memory Pi worker session using the currently selected model and
-thinking level. A worker receives only its assigned job prompt and reads that
+a fresh, in-memory Pi worker session per drafting or review invocation, using
+the captured model and thinking pair. A worker receives only its assigned job prompt and reads that
 job's files plus the private master materials; it has no history from another
-application, no loaded extensions or skills, and only read/write/edit tools.
+application, no loaded skills or project context, and only read/write/edit tools.
+The active provider's lifecycle extension is retained so providers such as MTPLX
+can start their local model server.
 
-The worker analyzes, selects, rewrites, and fact-checks the résumé plan. The
-coordinator then validates cited master-resume IDs, compiles the PDF, and sends
-only compact page-count feedback to that same worker if it needs a shorter
-plan. Batch jobs are fully completed one at a time before the next worker is
-created.
+While a worker runs, a live panel above the Pi editor shows the selected model,
+elapsed time, current activity, model turns, tool calls, time since the last
+event, and a streaming preview of its response. Thinking is reported as activity;
+completed response text and tool activity appear in Pi's chat area. These UI
+updates do not add the worker conversation to the main agent's context.
+Full completed responses, tool activity, and phase changes are also saved to
+the application's private `worker-output.log` (which may contain resume content).
+The extension imposes no per-call output-token cap or wall-clock worker deadline;
+the selected model/provider's own limits still apply. Existing factual-repair
+and PDF-layout attempt limits remain in effect.
 
-Each application receives its own folder under .pi/apply-job/jobs containing:
+First a fresh worker extracts requirements with exact quotes from the posting.
+The coordinator verifies that every quote actually occurs in the saved source.
+The drafting worker analyzes, selects, rewrites, and self-checks the résumé
+plan. Before rendering, a separate isolated verifier independently audits the
+plan and preview against the master resume. A second isolated job-fit reviewer
+then looks for only concrete, master-evidence-backed improvements for that
+posting. A deterministic claim ledger maps plan fields to exact master-source
+blocks and line numbers. Reviewers examine the source text as well as its IDs.
+The quality review must cover every requirement exactly once as `supported`,
+`unsupported_but_real`, or `irrelevant`, with explanations and links to selected
+claims. Missing qualifications are recorded separately from fixable résumé
+weaknesses; there is no quality-score threshold to chase. Review suggestions
+must cite existing master facts, including stronger omitted alternatives.
+Either reviewer sends actionable feedback to a fresh drafting context.
+Malformed reviews get at most one retry; stale or contradictory approvals are
+not accepted. Inputs modified during review invalidate the result.
+
+There are at most four drafting calls (initial draft plus three revisions) and
+three render attempts per revision window, persisted across restarts. All
+factual, quality, structural, and layout repairs share that drafting budget.
+Reaching a cap leaves the job incomplete with feedback; an explicit human
+revision starts another bounded window.
+
+The coordinator compiles the PDF, extracts line coordinates with Poppler, and
+checks page count, header wrapping/centering, section order, skill line count,
+tiny text, page-margin overflow, large gaps, and vertical fill. A layout failure
+returns measured feedback to a fresh drafter and reruns both reviews. Skills
+are never scaled down to force a fit. Geometry checks do not replace human
+visual judgment; the approval page includes the rendered preview.
+With `--cover-letter`, this happens first; then a separate isolated
+writer uses the candidate's cover-letter library to draft a 250–425 word
+one-page letter. A second isolated reviewer checks its factual grounding,
+job-specific relevance, tone, narrative quality, and length. The coordinator
+passes any review feedback back to the writer for up to three draft/review
+attempts. Batch jobs are fully completed one at a time before the next worker
+is created.
+
+Each application receives its own folder under `~/.pi/apply-job/jobs` containing:
 
 - source.json, job.md, and job.json: source job information
 - analysis.md: evidence-based fit assessment
 - resume-plan.json: selected content with master-resume evidence IDs
-- verification.json: factual audit result
+- verification.json: drafting worker's factual audit
+- independent-verification.json: separate factual audit against the master resume
+- requirements.json: requirements with validated verbatim posting quotes
+- claim-ledger.json: selected claims, source text, line numbers, and content hashes
+- quality-review.json: complete requirement coverage and excluded alternatives
 - resume.tex and resume.pdf: deterministic renderer outputs
-- layout.json and metadata.json: render state, page count, and timestamps
+- layout.json, visual-qa.json, resume-preview.png: measured layout checks and preview
+- pipeline-state.json: content-bound checkpoints, budgets, and locked selections
+- review.html and human-approval.json: final review and version-specific approval
+- history/: preserved artifacts from earlier drafts, including legacy plans
+- metadata.json: overall stage, errors, and timestamps
+- cover-letter.md and cover-letter-review.json: optional tailored letter and
+  independent review record, created only with `--cover-letter`
 
 The worker cannot solve overflow by changing the template. It revises only the
 verified plan, while the coordinator calls the bundled renderer again. The
@@ -94,17 +204,11 @@ renderer requires exactly one PDF page and permits at most three render attempts
 
 ## Requirements
 
-The rendering step uses Tectonic and pdfinfo. Install them before use:
+The rendering step uses Tectonic and Poppler (`pdftotext`, `pdftoppm`). Install them before use:
 
 ~~~
 brew install tectonic poppler
 ~~~
-
-## Roadmap
-
-- [ ] Add a separate, isolated cover-letter worker. It will select from a private
-  master cover-letter paragraph library and writing-style samples to produce a
-  tailored cover letter for each job alongside the tailored résumé.
 
 ## Privacy and security
 

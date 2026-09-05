@@ -158,7 +158,11 @@ print(json.dumps({"result": result} if result is not None else {"result": ""}))
 				"-c",
 				wrapperScript,
 				JSON.stringify(params),
-			], { maxBuffer: 2 * 1024 * 1024, timeout: 45_000 }));
+			], {
+				maxBuffer: 2 * 1024 * 1024,
+				timeout: 45_000,
+				env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+			}));
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			throw new Error(`Python tool ${path.basename(filePath)} failed: ${message}`);

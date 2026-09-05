@@ -1,8 +1,8 @@
-/** Filesystem helpers and project-local workspace management. */
+/** Filesystem helpers and user-wide Pi workspace management. */
 
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { JobMetadata, PipelineStage } from "./schemas.js";
 
 export interface ApplyJobWorkspace {
@@ -10,22 +10,33 @@ export interface ApplyJobWorkspace {
 	jobsDir: string;
 	masterDir: string;
 	templateDir: string;
+	coverLetterDir: string;
 }
 
-/** Personal data is owned by the consuming project, never by this npm package. */
-export function getWorkspace(cwd: string): ApplyJobWorkspace {
-	const rootDir = path.join(path.resolve(cwd), CONFIG_DIR_NAME, "apply-job");
+/** Build a workspace from an explicit root. Intended for tests. */
+export function workspaceAt(root: string): ApplyJobWorkspace {
+	const rootDir = path.resolve(root);
 	return {
 		rootDir,
 		jobsDir: path.join(rootDir, "jobs"),
 		masterDir: path.join(rootDir, "master"),
 		templateDir: path.join(rootDir, "master", "template"),
+		coverLetterDir: path.join(rootDir, "master", "cover-letter"),
 	};
+}
+
+/**
+ * Personal resume data and generated applications live beside Pi's agent
+ * state, never in the extension package or the caller's project.
+ */
+export function getWorkspace(): ApplyJobWorkspace {
+	return workspaceAt(path.join(path.dirname(getAgentDir()), "apply-job"));
 }
 
 export function ensureWorkspace(workspace: ApplyJobWorkspace): void {
 	fs.mkdirSync(workspace.jobsDir, { recursive: true });
 	fs.mkdirSync(workspace.templateDir, { recursive: true });
+	fs.mkdirSync(workspace.coverLetterDir, { recursive: true });
 }
 
 export function masterFilePath(
@@ -39,12 +50,32 @@ export function templateFilePath(workspace: ApplyJobWorkspace): string {
 	return path.join(workspace.templateDir, "resume-template.tex");
 }
 
-export function missingSourceFiles(workspace: ApplyJobWorkspace): string[] {
+/** Return the readable writing samples and background notes available to a cover-letter worker. */
+export function coverLetterSourceFiles(workspace: ApplyJobWorkspace): string[] {
+	const allowedExtensions = new Set([".md", ".txt"]);
+	const sources: string[] = [];
+	const visit = (directory: string): void => {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			if (entry.name.startsWith(".")) continue;
+			const entryPath = path.join(directory, entry.name);
+			if (entry.isDirectory()) visit(entryPath);
+			else if (entry.isFile() && allowedExtensions.has(path.extname(entry.name).toLowerCase())) sources.push(entryPath);
+		}
+	};
+	if (fs.existsSync(workspace.coverLetterDir)) visit(workspace.coverLetterDir);
+	return sources.sort();
+}
+
+export function missingSourceFiles(workspace: ApplyJobWorkspace, requireCoverLetterSources = false): string[] {
 	const sources = [
 		{ label: "master/resume.md", path: masterFilePath(workspace, "resume.md") },
 		{ label: "master/template/resume-template.tex", path: templateFilePath(workspace) },
 	];
-	return sources.filter((source) => !fs.existsSync(source.path)).map((source) => source.label);
+	const missing = sources.filter((source) => !fs.existsSync(source.path)).map((source) => source.label);
+	if (requireCoverLetterSources && coverLetterSourceFiles(workspace).length === 0) {
+		missing.push("at least one Markdown or text source in master/cover-letter/");
+	}
+	return missing;
 }
 
 export function sanitizeFolderName(name: string): string {
@@ -126,7 +157,7 @@ export function createInitialMetadata(
 	postedDate: string,
 ): JobMetadata {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		url,
 		company,
 		role,
@@ -142,6 +173,9 @@ export function createInitialMetadata(
 		stage: "scraped",
 		lastError: null,
 		layoutStatus: "not_configured",
+		coverLetterStatus: "not_requested",
+		coverLetterRevisionCount: 0,
+		coverLetterVerifiedAt: null,
 	};
 }
 

@@ -41,18 +41,32 @@ export type PipelineStage =
 	| "verifying"
 	| "rendering"
 	| "layout_verified"
+	| "awaiting_approval"
+	| "cover_letter_drafting"
+	| "cover_letter_verifying"
 	| "complete"
 	| "failed";
 
 /** A fact-backed plan that the deterministic renderer turns into a LaTeX resume. */
 export interface ResumePlan {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	target: { company: string; role: string };
 	header: { name: string; headline: string; contactLine: string; evidence: string[] };
+	education: {
+		institution: string;
+		degree: string;
+		gpa: string;
+		dates: string;
+		location: string;
+		evidence: string[];
+		honors: { items: string[]; evidence: string[] };
+		coursework: { items: string[]; evidence: string[] };
+	};
+	skills: Array<{ label: string; value: string; evidence: string[] }>;
 	sections: Array<{
 		title: string;
-		kind: "entries" | "skills";
-		entries?: Array<{
+		kind: "entries";
+		entries: Array<{
 			kind?: "standard" | "project";
 			title: string;
 			dates?: string;
@@ -61,7 +75,6 @@ export interface ResumePlan {
 			bullets: Array<{ text: string; evidence: string[] }>;
 			evidence: string[];
 		}>;
-		skills?: Array<{ label: string; value: string; evidence: string[] }>;
 	}>;
 }
 
@@ -89,6 +102,18 @@ export interface VerificationResult {
 	summary: string;
 }
 
+/** Independent review record for the optional cover-letter workflow. */
+export interface CoverLetterReview {
+	approved: boolean;
+	issues: Array<{
+		claim: string;
+		reason: string;
+		suggestion: string;
+	}>;
+	summary: string;
+	wordCount: number;
+}
+
 /** The result of compiling and visually checking a template-generated PDF. */
 export interface LayoutReport {
 	templateStatus: "not_configured" | "ready" | "passed" | "failed";
@@ -102,7 +127,7 @@ export interface LayoutReport {
 
 /** Top-level metadata persisted as metadata.json. */
 export interface JobMetadata {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	url: string;
 	company: string;
 	role: string;
@@ -118,4 +143,7 @@ export interface JobMetadata {
 	stage: PipelineStage;
 	lastError: string | null;
 	layoutStatus: LayoutReport["templateStatus"];
+	coverLetterStatus: "not_requested" | "drafting" | "verifying" | "approved" | "rejected";
+	coverLetterRevisionCount: number;
+	coverLetterVerifiedAt: string | null;
 }

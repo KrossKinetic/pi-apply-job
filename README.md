@@ -85,8 +85,8 @@ For a job task list (comma-separated, one URL per line, or semicolon-separated):
 /apply-job-file jobs.txt
 ~~~
 
-Batch mode processes every job through drafting, factual review, quality review,
-rendering, and layout QA without opening a per-job approval dialog. Each passing
+Batch mode processes every job through drafting, deterministic PDF layout QA,
+and factual review without opening a per-job approval dialog. Each passing
 job is saved at `awaiting_approval`; when the batch finishes, review and approve
 them individually with `/apply-job-review <job-folder>`.
 
@@ -110,20 +110,21 @@ render within two PDF lines; code rejects an otherwise valid draft that exceeds
 that limit.
 
 After all checks pass, `review.html` puts the rendered PDF preview alongside
-selected entries, requirement coverage, excluded alternatives, and factual
-findings. Pi offers **Open review page**, **Approve this version**, **Request a
+selected entries, the quote-validated job brief, and factual findings. Pi offers **Open review page**, **Approve this version**, **Request a
 revision**, **Lock a selected entry**, and **Review later**. A revision starts
 a fresh bounded drafting/review cycle; locks preserve whole selected entries.
 Approval is tied to the reviewed artifact version. Closing or cancelling the
 dialog leaves the job awaiting approval. Non-interactive runs also stop there.
 The PDF exists for review, but the job is not marked complete until approved.
+Completion requires a valid plan, a passing one-page layout report, a Low
+factual approval bound to the current artifact hash, and human approval of that
+same reviewed version.
 
-All workers use the model and thinking level selected in Pi when the command
-starts, including independent factual/quality reviewers and cover-letter workers.
-That pair stays fixed throughout the command's batch and revision loops. There
-is no automatic quality-variant switch or separate `reviewerModel` override.
-Resuming captures Pi's current pair for new workers while reusing valid checkpoints.
-The chosen provider, model, and thinking level are recorded in worker progress
+The résumé pipeline uses the model selected in Pi when the command starts with
+fixed role levels: **xhigh** for the drafter and targeted editor, and **low**
+for the initial job-brief extractor and independent factual auditor. Cover-letter workers retain the
+captured selection. Resuming captures Pi's current model for new workers while
+reusing valid checkpoints. The chosen provider, model, and thinking level are recorded in worker progress
 and `worker-model.json`.
 
 ## Worker architecture
@@ -147,67 +148,49 @@ completed response text and tool activity appear in Pi's chat area. These UI
 updates do not add the worker conversation to the main agent's context.
 Completed responses, tool activity, and phase changes are also saved to the
 application's private, size-capped `worker-output.log` (which may contain resume
-content). Chat notifications are truncated to a bounded preview.
-Drafting and cover-letter workers are capped at twelve model turns, sixteen
-tool calls, 200,000 streamed characters, and twenty minutes per invocation.
-Factual and quality reviewers receive a deterministic
-one-file review packet; requirement extraction reads the posting once. Each must
-submit its typed result after one evidence pass and is capped at five model turns,
-six tool calls, 100,000 streamed characters, and eight minutes. A capped reviewer
-is restarted once in a fresh context, then
-the application fails explicitly rather than looping indefinitely. The selected
-model/provider's own limits still apply. Existing factual-repair
-and PDF-layout attempt limits remain in effect.
+content). Completed-response chat notifications are truncated to a bounded
+preview; tool-call failures are shown and logged in full.
+Workers have no coordinator-imposed time, turn, tool-call, or streamed-character
+limits. The selected model/provider's own limits still apply. Logical safeguards
+remain: malformed factual reviews get one retry, factual-repair repetition stops
+for human review, and PDF layout attempts remain bounded.
 
-First a fresh worker extracts requirements with exact quotes from the posting.
-The coordinator verifies that every quote actually occurs in the saved source.
-The drafting worker analyzes, selects, rewrites, and self-checks the résumé
+The initial Low worker extracts requirements with exact quotes from the posting.
+The coordinator verifies every job quote against the saved source. The xhigh
+drafter then analyzes, selects, rewrites, and self-checks the résumé
 plan through `submit_resume_draft`. Its schema rejects wrong types, missing or
 unknown fields, and arbitrary output paths before execution; semantic checks
-then reject structural violations, unknown evidence IDs, inconsistent approval
-flags, and a mismatched company or role. Validation failures return immediately
+then reject structural violations, unknown evidence IDs, and a mismatched
+company or role. Validation failures return immediately
 to the same worker so it can correct the submitted arguments. Only after a
-submission passes does coordinator code write `analysis.md`, `resume-plan.json`,
-the deterministically derived `resume.md`, `verification.json`, and metadata.
-The requirement, factual-review, quality-review, cover-letter, and cover-letter-
-review workers use equivalent role-specific submission gates. Before rendering,
-a separate isolated verifier independently audits the
-plan and preview against the master resume. A second isolated job-fit reviewer
-then looks for only concrete, master-evidence-backed improvements for that
-posting. A deterministic claim ledger maps plan fields to exact master-source
-blocks and line numbers. Reviewers examine the source text as well as its IDs.
+submission passes does coordinator code write `resume-plan.json`,
+the deterministically derived `resume.md` and metadata.
+Before the Low factual audit, a deterministic claim ledger maps plan fields to
+exact master-source blocks and line numbers. The reviewer examines the source text as well as its IDs.
 Master source-bullet boundaries do not constrain résumé bullets: a tailored
 bullet may combine directly supported atomic facts from several source IDs, or
 split a broad source block into distinct non-duplicative bullets. Every
-contributing source ID is retained in that bullet's evidence array, and both
-factual and quality reviewers audit the composite claim at clause level.
-The quality review must cover every requirement exactly once as `supported`,
-`unsupported_but_real`, or `irrelevant`, with explanations and links to selected
-claims. Missing qualifications are recorded separately from fixable résumé
-weaknesses; there is no quality-score threshold to chase. Review suggestions
-must cite existing master facts, including stronger omitted alternatives.
-Either reviewer sends actionable feedback to a fresh drafting context.
-Malformed reviews get at most one retry; stale or contradictory approvals are
-not accepted. Inputs modified during review invalidate the result.
+contributing source ID is retained in that bullet's evidence array, and the Low
+reviewer audits every composite claim at clause level. It has no quality, ATS,
+requirement-coverage, omitted-content, or keyword-optimization responsibility.
+Each finding names the exact canonical plan path, offending clause, reason, and
+source IDs examined. All findings are returned in one Low audit.
 
-There are at most four accepted content drafts (initial draft plus three
-revisions) and three render attempts per revision window, persisted across
-restarts. Failed or rejected tool submissions do not consume a content attempt.
-Factual, quality, and structural changes share the content budget; measured
-layout repairs use the render budget and do not create impossible rounds such
-as 5/4.
-Legacy malformed self-verification artifacts receive one schema-only migration
-pass without consuming a content revision; new workers cannot create malformed
-artifacts because their submission schema is enforced before coordinator writes.
-If repeated quality preferences exhaust that budget, the last factually
-verified candidate is rendered and sent to human review with the unresolved
-quality suggestion visible; factual, structural, and layout failures still
-block. An explicit human revision starts another bounded window.
+The xhigh editor receives those findings, an explicit allowlist, and the current
+plan/master resume. It submits patches only: target path, replacement value, and
+evidence IDs. Work/project fixes are limited to the exact bullet text/evidence
+pair; skill fixes to one label/value field; coursework fixes to one course item.
+Entry titles, employers, dates, locations, honors, and other
+sections cannot be widened into a repair scope. Unauthorized patches are rejected
+without changing the canonical plan. A repaired résumé gets a full Low re-audit.
+If the same factual issue returns, or a finding has no permitted target, the
+pipeline stops for human review rather than spending another xhigh call.
 
 The coordinator compiles the PDF, extracts line coordinates with Poppler, and
 checks page count, header wrapping/centering, section order, skill line count,
 tiny text, page-margin overflow, large gaps, and vertical fill. A layout failure
-returns measured feedback to a fresh drafter and reruns both reviews. Skills
+after a targeted edit returns measured feedback to that same editor with its
+existing allowlist; scope is never widened. Skills
 are never scaled down to force a fit. Geometry checks do not replace human
 visual judgment; the approval page includes the rendered preview.
 With `--cover-letter`, this happens first; then a separate isolated
@@ -221,13 +204,10 @@ is created.
 Each application receives its own folder under `~/.pi/apply-job/jobs` containing:
 
 - source.json and job.md: source job information
-- analysis.md: evidence-based fit assessment
 - resume-plan.json: selected content with master-resume evidence IDs
-- verification.json: drafting worker's factual audit
 - independent-verification.json: separate factual audit against the master resume
-- job-requirement.json: AI-produced, quote-validated concise job brief for drafting and review
+- job-requirement.json: initial worker's quote-validated concise job brief
 - claim-ledger.json: selected claims, source text, line numbers, and content hashes
-- quality-review.json: complete requirement coverage and excluded alternatives
 - resume.tex and resume.pdf: deterministic renderer outputs
 - layout.json, visual-qa.json, resume-preview.png: measured layout checks and preview
 - pipeline-state.json: content-bound checkpoints, budgets, and locked selections

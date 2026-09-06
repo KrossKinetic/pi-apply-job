@@ -29,7 +29,6 @@ export function parseBoundingBoxes(xml: string): PdfPage[] {
  * entry count across both arrays.
  */
 export function checkStructure(plan: ResumePlan): void {
-  if (plan.schemaVersion !== 2) throw new Error("Legacy plan needs migration to schemaVersion 2");
   if (!Array.isArray(plan.workExperience) || !Array.isArray(plan.projects)) throw new Error("Plan workExperience/projects are missing");
   if (plan.workExperience.length + plan.projects.length !== 5) throw new Error("Select exactly 5 jobs/internships/projects in total");
   if (plan.workExperience.length < 3) throw new Error("Select at least 3 jobs/internships/research entries");

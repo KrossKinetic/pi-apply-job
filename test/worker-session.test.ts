@@ -27,7 +27,7 @@ test("real SDK worker sessions expose only the reader and role submission, and e
 			}],
 		});
 		await resourceLoader.reload();
-		const kinds: WorkerSubmissionKind[] = ["requirements", "resume_draft", "verification", "facts_review", "quality_review", "cover_letter", "cover_letter_review"];
+		const kinds: WorkerSubmissionKind[] = ["requirements", "resume_draft", "facts_review", "targeted_patch", "cover_letter", "cover_letter_review"];
 		for (const kind of kinds) {
 			const result = await createSubmissionWorkerSession({
 				cwd: f.root, agentDir, resourceLoader, settingsManager, modelRuntime,

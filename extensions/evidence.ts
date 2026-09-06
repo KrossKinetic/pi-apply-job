@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { readJsonFile, writeJsonFile } from "./utils.js";
 
 export const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 export type Source = { id: string; text: string; line: number };
@@ -30,9 +29,7 @@ export function buildLedger(plan: unknown, master: string): Ledger {
       const ids = record.evidence === undefined ? inherited : record.evidence;
       if (!Array.isArray(ids) || ids.some(id => typeof id !== "string" || !inventory.has(id))) throw new Error(`Unknown master-resume evidence ID at ${pointer}`);
       for (const [key, child] of Object.entries(record)) {
-        if (["evidence", "kind", "schemaVersion", "target"].includes(key)) continue;
-        // Section names are structural labels, not candidate claims.
-        if (key === "title" && pointer.match(/^\/sections\/\d+$/)) continue;
+        if (key === "evidence") continue;
         visit(child, `${pointer}/${key}`, ids);
       }
     } else if (typeof value === "string" && value.trim()) {
@@ -42,12 +39,6 @@ export function buildLedger(plan: unknown, master: string): Ledger {
   }
   visit(plan, "");
   return { masterHash: hash(master), planHash: hash(JSON.stringify(plan)), claims, availableSources: [...inventory.values()] };
-}
-
-export function writeLedger(folder: string, master: string): Ledger {
-  const ledger = buildLedger(readJsonFile(path.join(folder, "resume-plan.json")), master);
-  writeJsonFile(path.join(folder, "claim-ledger.json"), ledger);
-  return ledger;
 }
 
 export function artifactHash(folder: string, names: string[]): string {
@@ -122,46 +113,42 @@ export function validateJobRequirement(value: unknown, job: string): JobRequirem
   return { ...result, requirements };
 }
 
-export type Review = {
+/** A factual finding is deliberately narrow: it names the canonical claim
+ * path, the offending clause, why it is unsupported, and every source block
+ * examined. It has no ATS, completeness, keyword, or style fields. */
+export type FactualReview = {
   approved: boolean; summary: string;
-  issues: { claim: string; reason: string; evidence: string[]; suggestion: string }[];
-  coverage?: { requirementId: string; status: "supported" | "unsupported_but_real" | "irrelevant"; evidence: string[]; claimPaths: string[]; explanation: string }[];
-  alternatives?: { evidence: string[]; reason: string }[];
+  issues: { path: string; clause: string; reason: string; evidence: string[] }[];
 };
-export function validateReview(value: unknown, ledger: Ledger, requirements?: Requirement[]): Review {
-  const r = value as Review;
-  const known = new Set([...ledger.claims.flatMap(c => c.sources.map(s => s.id)), ...(ledger.availableSources || []).map(s => s.id)]);
-  const validText = (s: unknown): s is string => typeof s === "string" && !!s.trim();
-  const validIds = (ids: unknown, requireOne = true): ids is string[] => Array.isArray(ids) && (!requireOne || ids.length > 0) && ids.every(id => typeof id === "string" && known.has(id));
-  if (!r || typeof r.approved !== "boolean" || !validText(r.summary) || !Array.isArray(r.issues) || r.approved !== (r.issues.length === 0)) throw new Error("Review approval must agree with a concrete issues array and summary");
-  for (const [index, i] of r.issues.entries()) {
-    // One error per concrete cause, naming the exact field: a reviewer that
-    // gets "needs a claim, reason, suggestion, and real evidence IDs" for
-    // any one of four unrelated mistakes has nothing to act on and tends to
-    // resubmit the same broken issue unchanged.
-    if (!i || typeof i !== "object") throw new Error(`issues[${index}] must be an object with claim, reason, evidence, and suggestion`);
-    if (!validText(i.claim)) throw new Error(`issues[${index}].claim must be a non-empty string`);
-    if (!validText(i.reason)) throw new Error(`issues[${index}].reason must be a non-empty string`);
-    if (!validText(i.suggestion)) throw new Error(`issues[${index}].suggestion must be a non-empty string`);
-    if (!validIds(i.evidence)) throw new Error(`issues[${index}].evidence must be a non-empty array of real master-resume evidence IDs (unknown or missing IDs are rejected)`);
+
+/** Validate the factual-only review used by the Low audit worker. */
+export function validateFactualReview(value: unknown, ledger: Ledger): FactualReview {
+  const review = value as FactualReview;
+  const known = new Set([...ledger.claims.flatMap(claim => claim.sources.map(source => source.id)), ...(ledger.availableSources || []).map(source => source.id)]);
+  const validText = (text: unknown): text is string => typeof text === "string" && !!text.trim();
+  if (!review || typeof review.approved !== "boolean" || !validText(review.summary) || !Array.isArray(review.issues) || review.approved !== (review.issues.length === 0)) {
+    throw new Error("Factual-review approval must agree with a concrete issues array and summary");
   }
-  if (requirements) {
-    if (r.issues.length > 3) throw new Error("Quality review must prioritize at most three material improvements");
-    if (!Array.isArray(r.coverage) || r.coverage.length !== requirements.length) throw new Error("Coverage matrix must include every requirement exactly once");
-    const remaining = new Set(requirements.map(q => q.id));
-    for (const row of r.coverage) {
-      if (!row || !remaining.delete(row.requirementId) || !["supported", "unsupported_but_real", "irrelevant"].includes(row.status) || !validText(row.explanation) || !validIds(row.evidence, row.status === "supported") || !Array.isArray(row.claimPaths) || row.claimPaths.some(p => !ledger.claims.some(c => c.path === p))) throw new Error("Invalid requirement coverage row");
-      if (row.status === "supported" && (!row.claimPaths.length || row.claimPaths.some(p => !ledger.claims.find(c => c.path === p)!.sources.some(s => row.evidence.includes(s.id))))) throw new Error("Supported requirements need selected claims linked to their evidence");
-    }
-    // Evidence may legitimately be empty here: excluding a requirement because
-    // no master-resume support exists is an absence claim, and there is no
-    // source ID to cite for something that isn't in the master resume.
-    if (!Array.isArray(r.alternatives) || r.alternatives.some(a => !a || !validIds(a.evidence, false) || !validText(a.reason))) throw new Error("Quality review must list excluded alternatives with a reason, citing real master evidence IDs when any exist");
+  for (const [index, issue] of review.issues.entries()) {
+    const claim = issue && typeof issue === "object" && validText((issue as { path?: unknown }).path) ? ledger.claims.find(item => item.path === (issue as { path: string }).path) : undefined;
+    if (!claim) throw new Error(`issues[${index}].path must be an exact canonical claim path`);
+    if (!validText(issue.clause) || !validText(issue.reason)) throw new Error(`issues[${index}] needs a non-empty affected clause and reason`);
+    if (!claim.text.includes(issue.clause)) throw new Error(`issues[${index}].clause must occur in the claim at its canonical path`);
+    if (!Array.isArray(issue.evidence) || !issue.evidence.length || issue.evidence.some(id => typeof id !== "string" || !known.has(id))) throw new Error(`issues[${index}].evidence must list real examined master-resume evidence IDs`);
   }
-  return r;
+  return review;
 }
 
 /** Reviewers may cite unselected master facts; these are not rendered claims. */
 export function reviewLedger(ledger: Ledger, master: string): Ledger {
   return { ...ledger, availableSources: [...sourceInventory(master).values()] };
+}
+
+/** Header and fixed education facts are coordinator-copied from the master; the factual auditor only sees drafter-owned sections. */
+const factualAuditPrefixes = ["/education/coursework", "/skills", "/workExperience", "/projects"];
+export function factualAuditLedger(ledger: Ledger): Ledger {
+  return {
+    ...ledger,
+    claims: ledger.claims.filter(claim => factualAuditPrefixes.some(prefix => claim.path === prefix || claim.path.startsWith(`${prefix}/`))),
+  };
 }

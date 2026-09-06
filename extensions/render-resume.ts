@@ -88,10 +88,6 @@ function stripRepeatedGpa(degree: string, gpa: string): string {
 export function renderPlan(value: unknown): { header: string; content: string } {
 	checkStructure(value as ResumePlan);
 	const plan = object(value, "resume-plan.json");
-	if (plan.schemaVersion !== 2) throw new Error("resume-plan.json schemaVersion must be 2");
-	const target = object(plan.target, "target");
-	text(target.company, "target.company");
-	text(target.role, "target.role");
 	const header = object(plan.header, "header");
 	const name = text(header.name, "header.name");
 	const headline = text(header.headline, "header.headline", true);
@@ -194,8 +190,6 @@ function writeLayout(folder: string, report: LayoutReport): void {
 
 export async function renderResume(workspace: ApplyJobWorkspace, requestedFolder: string): Promise<RenderResult> {
 	const folder = resolveJobFolder(workspace, requestedFolder);
-	const verification = object(readJsonFile<unknown>(path.join(folder, "verification.json")), "verification.json");
-	if (verification.approved !== true) throw new Error("verification.json must approve the resume plan before rendering");
 	const plan = readJsonFile<unknown>(path.join(folder, "resume-plan.json"));
 	const rendered = renderPlan(plan);
 	assertEvidenceExists(plan, readTextFile(masterFilePath(workspace, "resume.md")));

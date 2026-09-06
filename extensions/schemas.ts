@@ -33,8 +33,6 @@ export type PipelineStage =
 
 /** A fact-backed plan that the deterministic renderer turns into a LaTeX resume. */
 export interface ResumePlan {
-	schemaVersion: 2;
-	target: { company: string; role: string };
 	header: { name: string; headline: string; contactLine: string; evidence: string[] };
 	education: {
 		institution: string;
@@ -65,29 +63,12 @@ export interface ResumePlan {
 	}>;
 }
 
-/** Structured analysis produced by the Job Analyzer agent. */
-export interface JobAnalysis {
-	fitScore: number;
-	strengths: string[];
-	weaknesses: string[];
-	explicitMatches: string[];
-	implicitSkills: Array<{
-		skill: string;
-		evidence: string[];
-	}>;
-	missingRequirements: string[];
-	resumeRecommendations: string[];
-}
-
-/** Verification result from the Resume Verifier agent. */
-export interface VerificationResult {
-	approved: boolean;
-	issues: Array<{
-		claim: string;
-		reason: string;
-	}>;
-	summary: string;
-}
+/** The only résumé-content choices the drafting worker must submit. */
+export type ResumePlanInput = Pick<ResumePlan, "skills"> & {
+	coursework: ResumePlan["education"]["coursework"];
+	workExperience: Array<{ id: string; bullets: ResumePlan["workExperience"][number]["bullets"] }>;
+	projects: Array<{ id: string; bullets: ResumePlan["projects"][number]["bullets"] }>;
+};
 
 /** Independent review record for the optional cover-letter workflow. */
 export interface CoverLetterReview {
@@ -124,8 +105,6 @@ export interface JobMetadata {
 	verifiedAt: string | null;
 	completedAt: string | null;
 	postedDate: string; // MMYYYY format
-	fitScore: number | null;
-	verificationStatus: "pending" | "approved" | "rejected";
 	revisionCount: number;
 	stage: PipelineStage;
 	lastError: string | null;

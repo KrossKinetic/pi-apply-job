@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ResumePlan } from "../extensions/schemas.js";
+import type { ResumePlan, ResumePlanInput } from "../extensions/schemas.js";
 import { createInitialMetadata, ensureWorkspace, saveMetadata, workspaceAt, writeJsonFile, writeTextFile } from "../extensions/utils.js";
 export const master = `# [identity-01] Example Candidate
 Software Systems
 
 - [identity-02] Email: candidate@example.com
 ## Education
-### [edu-01] Example University
+### [edu-01] Example University — City, ST
 B.S. Computer Science, GPA: 4.0/4.0
 2021 - 2025 | City, ST
 - [edu-02] Honors / Awards: Fellowship, Dean's List
@@ -16,7 +16,7 @@ B.S. Computer Science, GPA: 4.0/4.0
 ## Skills
 - [skill-01] Languages: TypeScript, Python
 - [skill-02] Tools: Git, Docker
-## Work
+## Work Experience
 ### [role-01] Engineer at Example Company
 2024 - 2025 | City, ST
 - [role-02] Built a reliable service with automated regression tests.
@@ -30,6 +30,7 @@ B.S. Computer Science, GPA: 4.0/4.0
 2022 - 2023 | City, ST
 - [role-09] Developed a concurrent data-processing experiment in Python.
 - [role-10] Documented reproducible evaluation procedures for the research team.
+## Projects
 ### [project-01] Systems Project
 2023
 - [project-02] Built an isolated systems test harness in Python.
@@ -38,8 +39,7 @@ B.S. Computer Science, GPA: 4.0/4.0
 - [project-04] Built a typed API prototype with automated request validation.
 `;
 export function planFixture(): ResumePlan {
-  return { schemaVersion: 2, target: {company:"Example",role:"Engineer"},
-    header:{name:"Example Candidate",headline:"Software Systems",contactLine:"candidate@example.com",evidence:["identity-01","identity-02"]},
+  return { header:{name:"Example Candidate",headline:"Software Systems",contactLine:"candidate@example.com",evidence:["identity-01","identity-02"]},
     education:{institution:"Example University",degree:"B.S. Computer Science",gpa:"4.0/4.0",dates:"2021 - 2025",location:"City, ST",evidence:["edu-01"],honors:{items:["Fellowship","Dean's List"],evidence:["edu-02"]},coursework:{items:["Algorithms","Systems"],evidence:["edu-03"]}},
     skills:[{label:"Languages",value:"TypeScript, Python",evidence:["skill-01"]},{label:"Tools",value:"Git, Docker",evidence:["skill-02"]}],
     workExperience:[
@@ -51,6 +51,15 @@ export function planFixture(): ResumePlan {
       {title:"Systems Project",dates:"2023",evidence:["project-01"],bullets:[{text:"Built an isolated systems test harness in Python.",evidence:["project-02"]}]},
       {title:"Service Project",dates:"2022",evidence:["project-03"],bullets:[{text:"Built a typed API prototype with automated request validation.",evidence:["project-04"]}]},
     ] };
+}
+export function planSubmissionFixture(): ResumePlanInput {
+  const plan = planFixture();
+  return {
+    coursework: plan.education.coursework,
+    skills: plan.skills,
+    workExperience: plan.workExperience.map(entry => ({ id: entry.evidence[0]!, bullets: entry.bullets })),
+    projects: plan.projects.map(entry => ({ id: entry.evidence[0]!, bullets: entry.bullets })),
+  };
 }
 export const template = String.raw`\documentclass[letterpaper,10pt]{article}
 \pagestyle{empty}
@@ -79,8 +88,6 @@ export function setup() {
   function draft(plan=planFixture()) {
     writeJsonFile(path.join(folder,"resume-plan.json"),plan);
     writeTextFile(path.join(folder,"resume.md"),"# Example Candidate\nBuilt a reliable service with automated regression tests.");
-    writeTextFile(path.join(folder,"analysis.md"),"# Requirement analysis");
-    writeJsonFile(path.join(folder,"verification.json"),{approved:true,issues:[],summary:"Checked."});
   }
   return {root,workspace,folder,draft,cleanup:()=>fs.rmSync(root,{recursive:true,force:true})};
 }

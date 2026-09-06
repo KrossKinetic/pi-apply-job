@@ -14,10 +14,13 @@ test("worker prompt enforces targeted selection and leaves rendering to the coor
 	});
 
 	assert.match(prompt, /4–7 most important requirements/);
-	assert.match(prompt, /exactly 5 entries total/);
-	assert.match(prompt, /at least 3 jobs\/internships\/research entries/);
-	assert.match(prompt, /Every job, internship, or research entry must have 2–3 distinct bullets/);
-	assert.match(prompt, /every project must have exactly 1 bullet/);
+	assert.match(prompt, /exactly 5 stable heading IDs total/);
+	assert.match(prompt, /at least 3 jobs\/internships\/research IDs/);
+	assert.match(prompt, /For each work ID, submit 2–3 distinct tailored bullets/);
+	assert.match(prompt, /for each project ID, exactly 1 bullet/);
+	assert.match(prompt, /Each workExperience\/project item contains only the stable heading id and its tailored bullet/);
+	assert.match(prompt, /do not include schemaVersion, target, header, education/);
+	assert.match(prompt, /never a JSON-encoded string or a value nested under a resumePlan key/);
 	assert.match(prompt, /no more than two PDF lines/);
 	assert.doesNotMatch(prompt, /4–6 experience bullets/);
 	assert.match(prompt, /projected or estimated result must retain both its qualifier and attribution/);
@@ -27,6 +30,7 @@ test("worker prompt enforces targeted selection and leaves rendering to the coor
 	assert.match(prompt, /The coordinator owns rendering/);
 	assert.match(prompt, /Do not put the completed artifact in a chat message/);
 	assert.match(prompt, /final action in this conversation must be exactly one call to the `submit_resume_draft` tool/);
+	assert.doesNotMatch(prompt, /verification\.approved/);
 	assert.doesNotMatch(prompt, /apply_job_render_resume/);
 });
 
@@ -40,17 +44,16 @@ test("drafter and reviewers receive concise role-specific résumé craft guidanc
 	assert.match(workerSystemPrompt("draft", "resume_draft"), /fast human skim and basic applicant-tracking parsing/);
 	assert.match(workerSystemPrompt("draft", "resume_draft"), /distinct action, technical scope, and result/);
 	assert.match(workerSystemPrompt("facts", "facts_review"), /every atomic assertion/);
-	assert.match(workerSystemPrompt("quality", "quality_review"), /at most three material, evidence-backed, feasible improvements/);
-	assert.match(workerSystemPrompt("quality", "quality_review"), /preference-only swap/);
+	assert.match(workerSystemPrompt("editor", "targeted_patch"), /only the coordinator-authorized patch paths/);
+	assert.match(workerSystemPrompt("editor", "targeted_patch"), /Never make a general quality, ATS, coverage, or keyword change/);
 });
 
 test("every worker receives an explicit tool-only completion protocol", () => {
 	for (const [kind, tool] of [
 		["requirements", "submit_requirements"],
 		["resume_draft", "submit_resume_draft"],
-		["verification", "submit_verification"],
 		["facts_review", "submit_factual_review"],
-		["quality_review", "submit_quality_review"],
+		["targeted_patch", "submit_targeted_patch"],
 		["cover_letter", "submit_cover_letter"],
 		["cover_letter_review", "submit_cover_letter_review"],
 	] as const) {

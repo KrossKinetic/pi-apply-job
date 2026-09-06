@@ -176,8 +176,6 @@ export function createInitialMetadata(
 		verifiedAt: null,
 		completedAt: null,
 		postedDate,
-		fitScore: null,
-		verificationStatus: "pending",
 		revisionCount: 0,
 		stage: "scraped",
 		lastError: null,

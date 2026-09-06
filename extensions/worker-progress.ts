@@ -59,10 +59,10 @@ export function createWorkerProgress(ui: ProgressUI, folder: string, label: stri
 	let lastRender = 0;
 	if (fs.existsSync(transcript)) fs.chmodSync(transcript, 0o600);
 
-	function record(text: string) {
+	function record(text: string, maximum = MAX_LOG_RECORD_CHARS) {
 		if (logFailed || logCapped) return;
 		try {
-			const bounded = excerpt(plain(text), MAX_LOG_RECORD_CHARS);
+			const bounded = maximum === Number.POSITIVE_INFINITY ? plain(text) : excerpt(plain(text), maximum);
 			const entry = `[${new Date().toISOString()}] ${bounded}\n\n`;
 			const bytes = Buffer.byteLength(entry);
 			if (loggedBytes + bytes > MAX_LOG_BYTES) {
@@ -178,9 +178,10 @@ export function createWorkerProgress(ui: ProgressUI, folder: string, label: stri
 			}
 			case "tool_execution_end": {
 				const detail = event.isError ? `: ${toolFailureDetail(event.result)}` : "";
-				activity = `${event.toolName} ${event.isError ? "failed" : "completed"}${detail}`;
-				record(activity);
-				ui.notify(`Résumé worker: ${excerpt(plain(activity), MAX_NOTICE_CHARS)}`, event.isError ? "warning" : "info");
+				const summary = `${event.toolName} ${event.isError ? "failed" : "completed"}`;
+				activity = `${summary}${event.isError ? " — see notification and worker-output.log" : ""}`;
+				record(`${summary}${detail}`, event.isError ? Number.POSITIVE_INFINITY : MAX_LOG_RECORD_CHARS);
+				ui.notify(`Résumé worker: ${event.isError ? plain(`${summary}${detail}`) : excerpt(plain(`${summary}${detail}`), MAX_NOTICE_CHARS)}`, event.isError ? "warning" : "info");
 				break;
 			}
 			case "auto_retry_start":

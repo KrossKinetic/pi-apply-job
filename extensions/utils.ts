@@ -2,8 +2,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { JobMetadata, PipelineStage } from "./schemas.js";
+import type { JobMetadata } from "./schemas.js";
 
 export interface ApplyJobWorkspace {
 	rootDir: string;
@@ -34,9 +35,10 @@ export function getWorkspace(): ApplyJobWorkspace {
 }
 
 export function ensureWorkspace(workspace: ApplyJobWorkspace): void {
-	fs.mkdirSync(workspace.jobsDir, { recursive: true });
-	fs.mkdirSync(workspace.templateDir, { recursive: true });
-	fs.mkdirSync(workspace.coverLetterDir, { recursive: true });
+	for (const directory of [workspace.rootDir, workspace.jobsDir, workspace.masterDir, workspace.templateDir, workspace.coverLetterDir]) {
+		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+		fs.chmodSync(directory, 0o700);
+	}
 }
 
 export function masterFilePath(
@@ -78,7 +80,7 @@ export function missingSourceFiles(workspace: ApplyJobWorkspace, requireCoverLet
 	return missing;
 }
 
-export function sanitizeFolderName(name: string): string {
+function sanitizeFolderName(name: string): string {
 	const slug = name
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "_")
@@ -87,7 +89,7 @@ export function sanitizeFolderName(name: string): string {
 	return slug || "unknown";
 }
 
-export function buildJobFolder(
+function buildJobFolder(
 	workspace: ApplyJobWorkspace,
 	company: string,
 	role: string,
@@ -108,11 +110,12 @@ export function ensureJobFolder(
 	postedDate: string,
 ): string {
 	const baseFolder = buildJobFolder(workspace, company, role, postedDate);
-	fs.mkdirSync(path.dirname(baseFolder), { recursive: true });
+	fs.mkdirSync(path.dirname(baseFolder), { recursive: true, mode: 0o700 });
+	fs.chmodSync(path.dirname(baseFolder), 0o700);
 	for (let suffix = 1; ; suffix += 1) {
 		const folder = suffix === 1 ? baseFolder : `${baseFolder}-${suffix}`;
 		try {
-			fs.mkdirSync(folder);
+			fs.mkdirSync(folder, { mode: 0o700 });
 			return folder;
 		} catch (error) {
 			if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) {
@@ -128,10 +131,16 @@ export function readTextFile(filePath: string): string {
 
 /** Atomically replace a text artifact so interrupted writes cannot corrupt it. */
 export function writeTextFile(filePath: string, content: string): void {
-	fs.mkdirSync(path.dirname(filePath), { recursive: true });
-	const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-	fs.writeFileSync(temporaryPath, content, "utf8");
-	fs.renameSync(temporaryPath, filePath);
+	fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+	const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		fs.writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+		fs.chmodSync(temporaryPath, 0o600);
+		fs.renameSync(temporaryPath, filePath);
+	} finally {
+		try { fs.unlinkSync(temporaryPath); }
+		catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+	}
 }
 
 export function writeJsonFile(filePath: string, data: unknown): void {
@@ -188,8 +197,4 @@ export function updateMetadata(folder: string, changes: Partial<JobMetadata>): J
 	const next = { ...current, ...changes };
 	saveMetadata(folder, next);
 	return next;
-}
-
-export function markPipelineFailed(folder: string, error: string): JobMetadata {
-	return updateMetadata(folder, { stage: "failed" as PipelineStage, lastError: error });
 }

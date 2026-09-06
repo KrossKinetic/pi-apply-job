@@ -17,22 +17,6 @@ export interface ScrapedJob {
 	error: string | null;
 }
 
-/** Parsed job posting stored as job.md source. */
-export interface JobPosting {
-	schemaVersion: 1;
-	url: string;
-	company: string;
-	role: string;
-	title: string;
-	description: string;
-	requirements: string[];
-	niceToHave: string[];
-	location: string;
-	postedDate: string;
-	deadline: string;
-	applyUrl: string;
-}
-
 /** Pipeline state persisted so an interrupted run can be inspected or resumed. */
 export type PipelineStage =
 	| "scraped"
@@ -63,18 +47,21 @@ export interface ResumePlan {
 		coursework: { items: string[]; evidence: string[] };
 	};
 	skills: Array<{ label: string; value: string; evidence: string[] }>;
-	sections: Array<{
+	/** Rendered under the fixed "Work Experience" heading; the array position is the only kind discriminator. */
+	workExperience: Array<{
 		title: string;
-		kind: "entries";
-		entries: Array<{
-			kind?: "standard" | "project";
-			title: string;
-			dates?: string;
-			subtitle?: string;
-			location?: string;
-			bullets: Array<{ text: string; evidence: string[] }>;
-			evidence: string[];
-		}>;
+		dates: string;
+		subtitle: string;
+		location: string;
+		bullets: Array<{ text: string; evidence: string[] }>;
+		evidence: string[];
+	}>;
+	/** Rendered under the fixed "Projects" heading, only when non-empty. */
+	projects: Array<{
+		title: string;
+		dates?: string;
+		bullets: Array<{ text: string; evidence: string[] }>;
+		evidence: string[];
 	}>;
 }
 
@@ -86,7 +73,7 @@ export interface JobAnalysis {
 	explicitMatches: string[];
 	implicitSkills: Array<{
 		skill: string;
-		evidence: string;
+		evidence: string[];
 	}>;
 	missingRequirements: string[];
 	resumeRecommendations: string[];

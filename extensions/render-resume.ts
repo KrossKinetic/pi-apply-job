@@ -78,6 +78,13 @@ function escapeLatex(value: string): string {
 		.replace(/[–—]/g, "--");
 }
 
+function stripRepeatedGpa(degree: string, gpa: string): string {
+	if (!gpa) return degree;
+	const match = degree.match(/(?:\s*[,—–-]\s*)?GPA\s*:\s*([0-9.]+\s*\/\s*[0-9.]+)\s*$/i);
+	if (!match || match[1].replace(/\s/g, "") !== gpa.replace(/\s/g, "")) return degree;
+	return degree.slice(0, match.index).trim();
+}
+
 export function renderPlan(value: unknown): { header: string; content: string } {
 	checkStructure(value as ResumePlan);
 	const plan = object(value, "resume-plan.json");
@@ -92,8 +99,9 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 	sourceIds(header.evidence, "header.evidence");
 	const education = object(plan.education, "education");
 	const institution = escapeLatex(text(education.institution, "education.institution"));
-	const degree = escapeLatex(text(education.degree, "education.degree"));
-	const gpa = escapeLatex(text(education.gpa, "education.gpa", true));
+	const rawGpa = text(education.gpa, "education.gpa", true);
+	const degree = escapeLatex(stripRepeatedGpa(text(education.degree, "education.degree"), rawGpa));
+	const gpa = escapeLatex(rawGpa);
 	const educationDates = escapeLatex(text(education.dates, "education.dates"));
 	const educationLocation = escapeLatex(text(education.location, "education.location"));
 	sourceIds(education.evidence, "education.evidence");
@@ -111,37 +119,53 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 		sourceIds(skill.evidence, "skill.evidence");
 		return "\\piSkillLine{\\textbf{" + escapeLatex(text(skill.label, "skill.label")) + "}: " + escapeLatex(text(skill.value, "skill.value")) + "}";
 	}).join("\n");
-	if (!Array.isArray(plan.sections) || !plan.sections.length) throw new Error("sections must be a non-empty array");
-
-	const sections = plan.sections.map((rawSection, sectionIndex) => {
-		const section = object(rawSection, "sections[" + sectionIndex + "]");
-		const title = escapeLatex(text(section.title, "section.title"));
-		const kind = text(section.kind, "section.kind");
-		if (kind !== "entries" || !Array.isArray(section.entries) || !section.entries.length) {
-			throw new Error("each section must be a non-empty entries section");
+	// The renderer, not the worker, owns the fixed "Work Experience" and
+	// "Projects" headings and their order: there is no free-text section title
+	// left in the contract for a duplicate, misnamed, or misordered heading.
+	if (!Array.isArray(plan.workExperience) || plan.workExperience.length < 3) {
+		throw new Error("workExperience must contain at least 3 entries");
+	}
+	if (!Array.isArray(plan.projects)) throw new Error("projects must be an array");
+	if (plan.workExperience.length + plan.projects.length !== 5) {
+		throw new Error("workExperience and projects must contain exactly 5 entries in total");
+	}
+	const bulletsTex = (rawBullets: unknown, label: string, minItems: number, maxItems: number) => {
+		if (!Array.isArray(rawBullets) || rawBullets.length < minItems || rawBullets.length > maxItems) {
+			throw new Error(`${label} must contain ${minItems === maxItems ? `exactly ${minItems}` : `${minItems}–${maxItems}`} bullet(s)`);
 		}
-		const entries = section.entries.map((rawEntry) => {
-			const entry = object(rawEntry, "entry");
-			const entryKind = text(entry.kind, "entry.kind", true) || "standard";
-			if (entryKind !== "standard" && entryKind !== "project") throw new Error("entry.kind must be standard or project");
-			const titleText = escapeLatex(text(entry.title, "entry.title"));
-			const dates = escapeLatex(text(entry.dates, "entry.dates", true));
-			const subtitle = escapeLatex(text(entry.subtitle, "entry.subtitle", true));
-			const location = escapeLatex(text(entry.location, "entry.location", true));
-			sourceIds(entry.evidence, "entry.evidence");
-			if (!Array.isArray(entry.bullets) || !entry.bullets.length) throw new Error("entry.bullets must be non-empty");
-			const bullets = entry.bullets.map((rawBullet) => {
-				const bullet = object(rawBullet, "bullet");
-				sourceIds(bullet.evidence, "bullet.evidence");
-				return "  \\resumeItem{" + escapeLatex(text(bullet.text, "bullet.text")) + "}";
-			}).join("\n");
-			const heading = entryKind === "project"
-				? "\\resumeProjectHeading{\\textbf{" + titleText + "}}{" + dates + "}"
-				: "\\resumeSubheading{" + titleText + "}{" + dates + "}{" + subtitle + "}{" + location + "}";
-			return heading + "\n\\resumeItemListStart\n" + bullets + "\n\\resumeItemListEnd";
-		}).join("\n\\vspace{2pt}\n");
-		return "\\section{" + title + "}\n\\resumeSubHeadingListStart\n" + entries + "\n\\resumeSubHeadingListEnd";
-	});
+		return rawBullets.map((rawBullet, bulletIndex) => {
+			const bullet = object(rawBullet, `${label}[${bulletIndex}]`);
+			sourceIds(bullet.evidence, `${label}[${bulletIndex}].evidence`);
+			return "  \\resumeItem{" + escapeLatex(text(bullet.text, `${label}[${bulletIndex}].text`)) + "}";
+		}).join("\n");
+	};
+	const workEntries = plan.workExperience.map((rawEntry, index) => {
+		const label = `workExperience[${index}]`;
+		const entry = object(rawEntry, label);
+		const titleText = escapeLatex(text(entry.title, `${label}.title`));
+		const dates = escapeLatex(text(entry.dates, `${label}.dates`));
+		const subtitle = escapeLatex(text(entry.subtitle, `${label}.subtitle`));
+		const location = escapeLatex(text(entry.location, `${label}.location`));
+		sourceIds(entry.evidence, `${label}.evidence`);
+		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, 2, 3);
+		const heading = "\\resumeSubheading{" + titleText + "}{" + dates + "}{" + subtitle + "}{" + location + "}";
+		return heading + "\n\\resumeItemListStart\n" + bullets + "\n\\resumeItemListEnd";
+	}).join("\n\\vspace{2pt}\n");
+	const workSection = "\\section{Work Experience}\n\\resumeSubHeadingListStart\n" + workEntries + "\n\\resumeSubHeadingListEnd";
+	const projectEntries = plan.projects.map((rawEntry, index) => {
+		const label = `projects[${index}]`;
+		const entry = object(rawEntry, label);
+		const titleText = escapeLatex(text(entry.title, `${label}.title`));
+		const dates = escapeLatex(text(entry.dates, `${label}.dates`, true));
+		sourceIds(entry.evidence, `${label}.evidence`);
+		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, 1, 1);
+		const heading = "\\resumeProjectHeading{\\textbf{" + titleText + "}}{" + dates + "}";
+		return heading + "\n\\resumeItemListStart\n" + bullets + "\n\\resumeItemListEnd";
+	}).join("\n\\vspace{2pt}\n");
+	const projectsSection = plan.projects.length
+		? "\\section{Projects}\n\\resumeSubHeadingListStart\n" + projectEntries + "\n\\resumeSubHeadingListEnd"
+		: "";
+	const sections = [workSection, projectsSection].filter(Boolean);
 
 	const title = headline ? escapeLatex(name) + " --- " + escapeLatex(headline) : escapeLatex(name);
 	const educationBullets = [
@@ -158,8 +182,8 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 }
 
 function resolveJobFolder(workspace: ApplyJobWorkspace, requested: string): string {
-	const root = path.resolve(workspace.jobsDir);
-	const folder = path.resolve(requested);
+	const root = fs.realpathSync(workspace.jobsDir);
+	const folder = fs.realpathSync(path.resolve(requested));
 	if (!folder.startsWith(root + path.sep)) throw new Error("jobFolder must be inside the user-wide apply-job/jobs directory");
 	return folder;
 }
@@ -189,6 +213,7 @@ export async function renderResume(workspace: ApplyJobWorkspace, requestedFolder
 	try {
 		const compiled = await execFileP("tectonic", ["--outdir", folder, texPath], { timeout: 90_000, maxBuffer: 2 * 1024 * 1024 });
 		if (!fs.existsSync(pdfPath)) throw new Error("Tectonic completed without creating resume.pdf");
+		fs.chmodSync(pdfPath, 0o600);
 		const visual = await inspectPdf(folder, plan as ResumePlan, compiled.stdout + compiled.stderr);
 		const { pageCount, passed, warnings } = visual;
 		writeJsonFile(path.join(folder, "visual-qa.json"), visual);

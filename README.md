@@ -104,6 +104,11 @@ affected checks. Legacy plans are retained under `history/` and migrated by a
 fresh drafter in the same job folder. A per-job coordinator lock prevents
 concurrent resume operations. Interrupted processes can resume after exit.
 
+Every tailored résumé uses exactly five combined work/research/project entries,
+including at least three work/research entries. Work-experience bullets must
+render within two PDF lines; code rejects an otherwise valid draft that exceeds
+that limit.
+
 After all checks pass, `review.html` puts the rendered PDF preview alongside
 selected entries, requirement coverage, excluded alternatives, and factual
 findings. Pi offers **Open review page**, **Approve this version**, **Request a
@@ -127,29 +132,55 @@ The extension is the deterministic coordinator. For every application it creates
 a fresh, in-memory Pi worker session per drafting or review invocation, using
 the captured model and thinking pair. A worker receives only its assigned job prompt and reads that
 job's files plus the private master materials; it has no history from another
-application, no loaded skills or project context, and only read/write/edit tools.
+application, no loaded skills or project context, and only a role-scoped reader
+plus one typed submission tool. The reader accepts only coordinator-assigned
+pipeline files; workers receive no generic read, write, edit, shell, or
+caller-selected output-path capability.
 The active provider's lifecycle extension is retained so providers such as MTPLX
 can start their local model server.
 
 While a worker runs, a live panel above the Pi editor shows the selected model,
 elapsed time, current activity, model turns, tool calls, time since the last
-event, and a streaming preview of its response. Thinking is reported as activity;
+event, and a streaming preview of its response. These measurements reset for
+each isolated worker rather than accumulating across the application. Thinking is reported as activity;
 completed response text and tool activity appear in Pi's chat area. These UI
 updates do not add the worker conversation to the main agent's context.
-Full completed responses, tool activity, and phase changes are also saved to
-the application's private `worker-output.log` (which may contain resume content).
-The extension imposes no per-call output-token cap or wall-clock worker deadline;
-the selected model/provider's own limits still apply. Existing factual-repair
+Completed responses, tool activity, and phase changes are also saved to the
+application's private, size-capped `worker-output.log` (which may contain resume
+content). Chat notifications are truncated to a bounded preview.
+Drafting and cover-letter workers are capped at twelve model turns, sixteen
+tool calls, 200,000 streamed characters, and twenty minutes per invocation.
+Factual and quality reviewers receive a deterministic
+one-file review packet; requirement extraction reads the posting once. Each must
+submit its typed result after one evidence pass and is capped at five model turns,
+six tool calls, 100,000 streamed characters, and eight minutes. A capped reviewer
+is restarted once in a fresh context, then
+the application fails explicitly rather than looping indefinitely. The selected
+model/provider's own limits still apply. Existing factual-repair
 and PDF-layout attempt limits remain in effect.
 
 First a fresh worker extracts requirements with exact quotes from the posting.
 The coordinator verifies that every quote actually occurs in the saved source.
 The drafting worker analyzes, selects, rewrites, and self-checks the résumé
-plan. Before rendering, a separate isolated verifier independently audits the
+plan through `submit_resume_draft`. Its schema rejects wrong types, missing or
+unknown fields, and arbitrary output paths before execution; semantic checks
+then reject structural violations, unknown evidence IDs, inconsistent approval
+flags, and a mismatched company or role. Validation failures return immediately
+to the same worker so it can correct the submitted arguments. Only after a
+submission passes does coordinator code write `analysis.md`, `resume-plan.json`,
+the deterministically derived `resume.md`, `verification.json`, and metadata.
+The requirement, factual-review, quality-review, cover-letter, and cover-letter-
+review workers use equivalent role-specific submission gates. Before rendering,
+a separate isolated verifier independently audits the
 plan and preview against the master resume. A second isolated job-fit reviewer
 then looks for only concrete, master-evidence-backed improvements for that
 posting. A deterministic claim ledger maps plan fields to exact master-source
 blocks and line numbers. Reviewers examine the source text as well as its IDs.
+Master source-bullet boundaries do not constrain résumé bullets: a tailored
+bullet may combine directly supported atomic facts from several source IDs, or
+split a broad source block into distinct non-duplicative bullets. Every
+contributing source ID is retained in that bullet's evidence array, and both
+factual and quality reviewers audit the composite claim at clause level.
 The quality review must cover every requirement exactly once as `supported`,
 `unsupported_but_real`, or `irrelevant`, with explanations and links to selected
 claims. Missing qualifications are recorded separately from fixable résumé
@@ -159,11 +190,19 @@ Either reviewer sends actionable feedback to a fresh drafting context.
 Malformed reviews get at most one retry; stale or contradictory approvals are
 not accepted. Inputs modified during review invalidate the result.
 
-There are at most four drafting calls (initial draft plus three revisions) and
-three render attempts per revision window, persisted across restarts. All
-factual, quality, structural, and layout repairs share that drafting budget.
-Reaching a cap leaves the job incomplete with feedback; an explicit human
-revision starts another bounded window.
+There are at most four accepted content drafts (initial draft plus three
+revisions) and three render attempts per revision window, persisted across
+restarts. Failed or rejected tool submissions do not consume a content attempt.
+Factual, quality, and structural changes share the content budget; measured
+layout repairs use the render budget and do not create impossible rounds such
+as 5/4.
+Legacy malformed self-verification artifacts receive one schema-only migration
+pass without consuming a content revision; new workers cannot create malformed
+artifacts because their submission schema is enforced before coordinator writes.
+If repeated quality preferences exhaust that budget, the last factually
+verified candidate is rendered and sent to human review with the unresolved
+quality suggestion visible; factual, structural, and layout failures still
+block. An explicit human revision starts another bounded window.
 
 The coordinator compiles the PDF, extracts line coordinates with Poppler, and
 checks page count, header wrapping/centering, section order, skill line count,
@@ -181,12 +220,12 @@ is created.
 
 Each application receives its own folder under `~/.pi/apply-job/jobs` containing:
 
-- source.json, job.md, and job.json: source job information
+- source.json and job.md: source job information
 - analysis.md: evidence-based fit assessment
 - resume-plan.json: selected content with master-resume evidence IDs
 - verification.json: drafting worker's factual audit
 - independent-verification.json: separate factual audit against the master resume
-- requirements.json: requirements with validated verbatim posting quotes
+- job-requirement.json: AI-produced, quote-validated concise job brief for drafting and review
 - claim-ledger.json: selected claims, source text, line numbers, and content hashes
 - quality-review.json: complete requirement coverage and excluded alternatives
 - resume.tex and resume.pdf: deterministic renderer outputs
@@ -204,6 +243,8 @@ renderer requires exactly one PDF page and permits at most three render attempts
 
 ## Requirements
 
+Node.js 22.19 or newer is required by the supported Pi runtime.
+
 The rendering step uses Tectonic and Poppler (`pdftotext`, `pdftoppm`). Install them before use:
 
 ~~~
@@ -213,8 +254,9 @@ brew install tectonic poppler
 ## Privacy and security
 
 The published package includes no resumes, profiles, job history, generated
-applications, or credentials. It accepts only public http(s) job URLs, blocks
-obvious localhost/private-IP targets, and never submits forms or clicks Apply.
+applications, or credentials. It accepts only public http(s) job URLs, rejects
+non-global literal and DNS-resolved addresses, and applies the same check to
+redirects and browser subresource requests. It never submits forms or clicks Apply.
 Extensions run with the host user's permissions; install only trusted packages.
 
 ## Development and release

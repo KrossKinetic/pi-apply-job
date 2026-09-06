@@ -22,17 +22,35 @@ B.S. Computer Science, GPA: 4.0/4.0
 - [role-02] Built a reliable service with automated regression tests.
 - [role-03] Reduced validation latency by 50% through caching.
 - [role-04] Coordinated releases with a three-person team.
+### [role-05] Platform Engineer at Example Company
+2023 - 2024 | City, ST
+- [role-06] Built an API service with structured validation and retries.
+- [role-07] Improved deployment reliability with containerized test environments.
+### [role-08] Research Assistant at Example University
+2022 - 2023 | City, ST
+- [role-09] Developed a concurrent data-processing experiment in Python.
+- [role-10] Documented reproducible evaluation procedures for the research team.
 ### [project-01] Systems Project
 2023
 - [project-02] Built an isolated systems test harness in Python.
+### [project-03] Service Project
+2022
+- [project-04] Built a typed API prototype with automated request validation.
 `;
 export function planFixture(): ResumePlan {
   return { schemaVersion: 2, target: {company:"Example",role:"Engineer"},
     header:{name:"Example Candidate",headline:"Software Systems",contactLine:"candidate@example.com",evidence:["identity-01","identity-02"]},
     education:{institution:"Example University",degree:"B.S. Computer Science",gpa:"4.0/4.0",dates:"2021 - 2025",location:"City, ST",evidence:["edu-01"],honors:{items:["Fellowship","Dean's List"],evidence:["edu-02"]},coursework:{items:["Algorithms","Systems"],evidence:["edu-03"]}},
     skills:[{label:"Languages",value:"TypeScript, Python",evidence:["skill-01"]},{label:"Tools",value:"Git, Docker",evidence:["skill-02"]}],
-    sections:[{title:"Work Experience",kind:"entries",entries:[{kind:"standard",title:"Engineer",subtitle:"Example Company",dates:"2024 - 2025",location:"City, ST",evidence:["role-01"],bullets:[{text:"Built a reliable service with automated regression tests.",evidence:["role-02"]},{text:"Reduced validation latency by 50% through caching.",evidence:["role-03"]}]}]},
-      {title:"Projects",kind:"entries",entries:[{kind:"project",title:"Systems Project",dates:"2023",subtitle:"",location:"",evidence:["project-01"],bullets:[{text:"Built an isolated systems test harness in Python.",evidence:["project-02"]}]}]}] };
+    workExperience:[
+      {title:"Engineer",subtitle:"Example Company",dates:"2024 - 2025",location:"City, ST",evidence:["role-01"],bullets:[{text:"Built a reliable service with automated regression tests.",evidence:["role-02"]},{text:"Reduced validation latency by 50% through caching.",evidence:["role-03"]}]},
+      {title:"Platform Engineer",subtitle:"Example Company",dates:"2023 - 2024",location:"City, ST",evidence:["role-05"],bullets:[{text:"Built an API service with structured validation and retries.",evidence:["role-06"]},{text:"Improved deployment reliability with containerized test environments.",evidence:["role-07"]}]},
+      {title:"Research Assistant",subtitle:"Example University",dates:"2022 - 2023",location:"City, ST",evidence:["role-08"],bullets:[{text:"Developed a concurrent data-processing experiment in Python.",evidence:["role-09"]},{text:"Documented reproducible evaluation procedures for the research team.",evidence:["role-10"]}]},
+    ],
+    projects:[
+      {title:"Systems Project",dates:"2023",evidence:["project-01"],bullets:[{text:"Built an isolated systems test harness in Python.",evidence:["project-02"]}]},
+      {title:"Service Project",dates:"2022",evidence:["project-03"],bullets:[{text:"Built a typed API prototype with automated request validation.",evidence:["project-04"]}]},
+    ] };
 }
 export const template = String.raw`\documentclass[letterpaper,10pt]{article}
 \pagestyle{empty}
@@ -57,7 +75,6 @@ export function setup() {
   writeTextFile(path.join(workspace.masterDir,"resume.md"),master);
   writeTextFile(path.join(workspace.templateDir,"resume-template.tex"),template);
   writeTextFile(path.join(folder,"job.md"),"# Example\nRequires Python and automated testing.\nGraduating in 2027.");
-  writeJsonFile(path.join(folder,"job.json"),{company:"Example",role:"Engineer"});
   saveMetadata(folder,createInitialMetadata("https://example.com/jobs/1","Example","Engineer","092026"));
   function draft(plan=planFixture()) {
     writeJsonFile(path.join(folder,"resume-plan.json"),plan);

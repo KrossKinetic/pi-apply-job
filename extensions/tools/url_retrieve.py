@@ -43,9 +43,10 @@ import asyncio
 import ipaddress
 import json
 import re
+import socket
 from html.parser import HTMLParser
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 try:
     from playwright.async_api import async_playwright
@@ -91,8 +92,8 @@ parameters = {
 # --------------- core function ---------------
 
 
-def _is_safe_public_url(url):
-    """Reject obvious local targets before a scraper process opens a connection."""
+def _is_safe_public_url(url, dns_cache=None):
+    """Require every resolved address to be globally routable before connecting."""
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return False
@@ -104,9 +105,20 @@ def _is_safe_public_url(url):
     try:
         return ipaddress.ip_address(hostname).is_global
     except ValueError:
-        # Domain names are allowed. The post-navigation URL is checked again
-        # to avoid following an obvious redirect to a local literal address.
-        return True
+        cache_key = (hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        if dns_cache is not None and cache_key in dns_cache:
+            return dns_cache[cache_key]
+        try:
+            addresses = {
+                item[4][0].split("%", 1)[0]
+                for item in socket.getaddrinfo(cache_key[0], cache_key[1], type=socket.SOCK_STREAM)
+            }
+            safe = bool(addresses) and all(ipaddress.ip_address(address).is_global for address in addresses)
+        except (OSError, ValueError):
+            safe = False
+        if dns_cache is not None:
+            dns_cache[cache_key] = safe
+        return safe
 
 
 class _PageTextParser(HTMLParser):
@@ -156,13 +168,26 @@ class _PageTextParser(HTMLParser):
             self._current_heading[1].append(value)
 
 
+class _PublicRedirectHandler(HTTPRedirectHandler):
+    """Reject unsafe redirect targets before urllib opens their connection."""
+
+    def __init__(self, dns_cache):
+        super().__init__()
+        self._dns_cache = dns_cache
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not _is_safe_public_url(newurl, self._dns_cache):
+            raise ValueError("Redirected to a non-public URL")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _retrieve_with_urllib(url, timeout, result):
     """Fetch static HTML when Playwright is not installed."""
     try:
+        dns_cache = {}
         request = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; PI-Scraper/1.0)"})
-        with urlopen(request, timeout=max(timeout / 1000, 1)) as response:
-            if not _is_safe_public_url(response.geturl()):
-                raise ValueError("Redirected to a non-public URL")
+        opener = build_opener(_PublicRedirectHandler(dns_cache))
+        with opener.open(request, timeout=max(timeout / 1000, 1)) as response:
             content_type = response.headers.get_content_type()
             if content_type not in {"text/html", "application/xhtml+xml"}:
                 raise ValueError(f"Expected an HTML page, received {content_type}")
@@ -222,6 +247,22 @@ async def run(params):
                     ),
                     java_script_enabled=True,
                 )
+                # A public page can embed requests to loopback, LAN, or cloud
+                # metadata endpoints. Gate every browser request, not only the
+                # top-level URL and its final redirect.
+                dns_cache = {}
+
+                async def route_public_only(route):
+                    requested = route.request.url
+                    scheme = urlparse(requested).scheme
+                    if scheme in {"about", "blob", "data"}:
+                        await route.continue_()
+                    elif await asyncio.to_thread(_is_safe_public_url, requested, dns_cache):
+                        await route.continue_()
+                    else:
+                        await route.abort("blockedbyclient")
+
+                await context.route("**/*", route_public_only)
                 page = await context.new_page()
 
                 # Network-idle is useful when it works, but job boards often keep

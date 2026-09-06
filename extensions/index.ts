@@ -6,23 +6,40 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 import fs from "node:fs";
+import { isIP } from "node:net";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { loadPythonTools } from "./python-tools.js";
 import { resumePipeline, runBatchPipeline, runPipeline } from "./workflow.js";
-import { renderResume } from "./render-resume.js";
 import { ensureWorkspace, getWorkspace, masterFilePath, templateFilePath } from "./utils.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BATCH_URLS = 25;
 const MAX_URL_FILE_BYTES = 64 * 1024;
 
-function isPublicHttpUrl(value: string): boolean {
+function isNonPublicIpLiteral(hostname: string): boolean {
+	const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	const version = isIP(host);
+	if (version === 4) {
+		const [a, b] = host.split(".").map(Number);
+		return a === 0 || a === 10 || a === 127 || a >= 224 ||
+			(a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+			(a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) ||
+			(a === 198 && (b === 18 || b === 19 || b === 51)) || (a === 203 && b === 0);
+	}
+	if (version === 6) {
+		return host === "::" || host === "::1" || host.startsWith("fc") || host.startsWith("fd") ||
+			host.startsWith("fe8") || host.startsWith("fe9") || host.startsWith("fea") || host.startsWith("feb") ||
+			host.startsWith("ff") || host.startsWith("2001:db8:") || host.startsWith("::ffff:127.") || host.startsWith("::ffff:10.");
+	}
+	return false;
+}
+
+export function isPublicHttpUrl(value: string): boolean {
 	try {
 		const parsed = new URL(value);
-		const host = parsed.hostname.toLowerCase();
+		const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
 		return Boolean(
 			host &&
 			["http:", "https:"].includes(parsed.protocol) &&
@@ -30,7 +47,8 @@ function isPublicHttpUrl(value: string): boolean {
 			!parsed.password &&
 			host !== "localhost" &&
 			!host.endsWith(".localhost") &&
-			!host.endsWith(".local"),
+			!host.endsWith(".local") &&
+			!isNonPublicIpLiteral(host),
 		);
 	} catch {
 		return false;
@@ -92,30 +110,6 @@ export default function (pi: ExtensionAPI) {
 			},
 		});
 	}
-
-	pi.registerTool({
-		name: "apply_job_render_resume",
-		label: "Render tailored resume",
-		description: "Render a verified resume-plan.json with the configured LaTeX template and return its PDF page count. Use only after factual verification; revise the plan rather than the template when the result exceeds one page.",
-		parameters: Type.Object({
-			jobFolder: Type.String({ description: "Absolute path to this application's job folder" }),
-		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			try {
-				const result = await renderResume(getWorkspace(), params.jobFolder);
-				return {
-					content: [{ type: "text", text: "Rendered " + result.pdfPath + ": " + result.pageCount + " page(s), " + (result.passed ? "passed" : "needs a shorter plan") + "." }],
-					details: result,
-				};
-			} catch (error) {
-				return {
-					content: [{ type: "text", text: "Resume rendering failed: " + (error instanceof Error ? error.message : String(error)) }],
-					details: {},
-					isError: true,
-				};
-			}
-		},
-	});
 
 	pi.registerCommand("apply-job-init", {
 		description: "Create the user-wide private Pi workspace used by pi-apply-job",

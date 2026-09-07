@@ -45,7 +45,7 @@ export interface ResumePlan {
 		coursework: { items: string[]; evidence: string[] };
 	};
 	skills: Array<{ label: string; value: string; evidence: string[] }>;
-	/** Rendered under the fixed "Work Experience" heading; the array position is the only kind discriminator. */
+	/** Rendered under the fixed "Professional Work Experience" heading; the array position is the only kind discriminator. */
 	workExperience: Array<{
 		title: string;
 		dates: string;
@@ -69,6 +69,19 @@ export type ResumePlanInput = Pick<ResumePlan, "skills"> & {
 	workExperience: Array<{ id: string; bullets: ResumePlan["workExperience"][number]["bullets"] }>;
 	projects: Array<{ id: string; bullets: ResumePlan["projects"][number]["bullets"] }>;
 };
+
+/** True after the drafter tool materializes header/education from the master resume. */
+export function isResumePlan(value: unknown): value is ResumePlan {
+	if (!value || typeof value !== "object") return false;
+	const plan = value as Partial<ResumePlan>;
+	return Boolean(
+		plan.header && typeof plan.header.name === "string" &&
+		plan.education && Array.isArray(plan.education.coursework?.items) &&
+		Array.isArray(plan.skills) &&
+		Array.isArray(plan.workExperience) &&
+		Array.isArray(plan.projects),
+	);
+}
 
 /** Independent review record for the optional cover-letter workflow. */
 export interface CoverLetterReview {

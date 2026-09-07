@@ -51,5 +51,5 @@ test("renderer does not repeat a GPA already included in the degree value", () =
   plan.education.gpa="3.9/4.0";
   const {content}=renderPlan(plan);
   assert.equal((content.match(/GPA:/g) || []).length,1);
-  assert.match(content,/B\.S\. in Computer Science Honors -- GPA: 3\.9\/4\.0/);
+  assert.match(content,/B\.S\. in Computer Science Honors --- GPA: 3\.9\/4\.0/);
 });

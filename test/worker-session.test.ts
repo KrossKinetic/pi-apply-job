@@ -4,7 +4,7 @@ import test from "node:test";
 import { DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createSubmissionWorkerSession } from "../extensions/worker-session.js";
-import { submissionToolName, type WorkerSubmissionKind } from "../extensions/worker-submissions.js";
+import { submissionToolName, workerReadToolName, type WorkerSubmissionKind } from "../extensions/worker-submissions.js";
 import { setup } from "./fixtures.js";
 
 test("real SDK worker sessions expose only the reader and role submission, and execute both", async () => {
@@ -34,13 +34,13 @@ test("real SDK worker sessions expose only the reader and role submission, and e
 				sessionManager: SessionManager.inMemory(f.root),
 			}, kind, { folder: f.folder, workspace: f.workspace, company: "Example", role: "Engineer" });
 			try {
-				const expected = ["read_pipeline_file", submissionToolName(kind)].sort();
+				const expected = [workerReadToolName(kind), submissionToolName(kind)].sort();
 				assert.deepEqual(result.session.getActiveToolNames().sort(), expected, kind);
 				// These are the actual tools exposed in the agent's model context, not just definitions.
 				const tools = result.session.agent.state.tools;
 				assert.deepEqual(tools.map(tool => tool.name).sort(), expected, kind);
 				if (kind === "requirements") {
-					const read = await tools.find(tool => tool.name === "read_pipeline_file")!.execute("read-1", { path: path.join(f.folder, "job.md") });
+					const read = await tools.find(tool => tool.name === "read_job_posting")!.execute("read-1", {});
 					assert.match(JSON.stringify(read.content), /Requires Python and automated testing/);
 					const payload = {
 						schemaVersion: 1,

@@ -5,9 +5,9 @@ import fs from "node:fs";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Check, Errors } from "typebox/value";
-import { buildLedger, factualAuditLedger, reviewLedger, sourceInventory, validateFactualReview, validateJobRequirement } from "./evidence.js";
+import { buildLedger, editablePath, factualAuditLedger, reviewLedger, sourceInventory, validateFactualReview, validateJobRequirement } from "./evidence.js";
 import { renderPlan, renderResume } from "./render-resume.js";
-import type { CoverLetterReview, ResumePlan, ResumePlanInput } from "./schemas.js";
+import { isResumePlan, type CoverLetterReview, type ResumePlan, type ResumePlanInput } from "./schemas.js";
 import { readJsonFile, readTextFile, writeJsonFile, writeTextFile, type ApplyJobWorkspace } from "./utils.js";
 
 export type WorkerSubmissionKind =
@@ -44,9 +44,9 @@ const selectedWorkEntry = Type.Object({ id: nonEmpty, bullets: Type.Array(bullet
 const selectedProjectEntry = Type.Object({ id: nonEmpty, bullets: Type.Array(bullet, { minItems: 1, maxItems: 1 }) }, { additionalProperties: false });
 const resumePlan = Type.Object({
 	coursework,
-	skills: Type.Array(Type.Object({ label: nonEmpty, value: nonEmpty, evidence }, { additionalProperties: false }), { minItems: 2, maxItems: 3 }),
-	workExperience: Type.Array(selectedWorkEntry, { minItems: 3, maxItems: 5 }),
-	projects: Type.Array(selectedProjectEntry, { minItems: 0, maxItems: 2 }),
+	skills: Type.Array(Type.Object({ label: nonEmpty, value: nonEmpty, evidence }, { additionalProperties: false }), { minItems: 1, maxItems: 3 }),
+	workExperience: Type.Array(selectedWorkEntry, { minItems: 3, maxItems: 4 }),
+	projects: Type.Array(selectedProjectEntry, { minItems: 1, maxItems: 2 }),
 }, { additionalProperties: false });
 const baseReview = {
 	approved: Type.Boolean(),
@@ -114,7 +114,7 @@ const toolNames: Record<WorkerSubmissionKind, string> = {
 
 const submissionShapes: Record<WorkerSubmissionKind, string> = {
 	requirements: "{ schemaVersion: 1, job: { company: string, role: string, roleQuote: string }, summary: { text: string, quotes: string[] }, details: [{ label: string, text: string, quote: string }], requirements: [{ id: string, text: string, quote: string, importance: \"core\" | \"supporting\" | \"optional\" }], skills: [{ name: string, quote: string, importance: \"core\" | \"supporting\" | \"optional\" }], responsibilities: [{ text: string, quote: string }] }",
-	resume_draft: "{ coursework: { items: string[] (0-8 completed courses), evidence: string[] }, skills: [...], workExperience: [{ id: string, bullets: [{text,evidence}] (2-3) }] (3-5 entries), projects: [{ id: string, bullets: [{text,evidence}] (exactly 1) }] (0-2 entries) }. Submit this plan object directly, never as a JSON-encoded string and never inside a resumePlan wrapper. Each work/project id must be the stable master-resume ID for its heading. The coordinator derives the fixed header, institution, degree, GPA, honors, and each selected entry's title, dates, subtitle, and location from the master resume. There is no analysis, verification, schemaVersion, target, header, education, sections, title, kind, dates, subtitle, location, or entry-level evidence field to submit.",
+	resume_draft: "{ coursework: { items: string[] filling exactly 2 PDF lines, evidence: string[] }, skills: 1–3 categories occupying at most 3 PDF lines, workExperience: 3 entries at 3/3/2 bullets or 4 entries at 3/3/2/2, projects: 2 entries (with 3 work) or 1 entry (with 4 work), each with exactly 1 bullet }. Submit this plan object directly, never as a JSON-encoded string or a value nested under a resumePlan wrapper. workExperience[0] and [1] have 3 bullets (2 PDF lines each); [2] has 2 bullets (2 PDF lines each); optional [3] has 2 bullets totaling 3 PDF lines. Each project bullet occupies 2–3 PDF lines. Each work/project id must be the stable master-resume ID for its heading. The coordinator derives the fixed header, institution, degree, GPA, honors, and each selected entry's title, dates, subtitle, and location from the master resume. There is no analysis, verification, schemaVersion, target, header, education, sections, title, kind, dates, subtitle, location, or entry-level evidence field to submit.",
 	facts_review: "{ approved: boolean, issues: [{ path: string, clause: string, reason: string, evidence: string[] }], summary: string }",
 	targeted_patch: "{ patches: [{ targetPath: string, replacement: string, evidence: string[] }] }. Every targetPath must be on the coordinator's allowlist; do not submit any other plan field.",
 	cover_letter: "{ text: string }",
@@ -125,10 +125,22 @@ export function submissionToolName(kind: WorkerSubmissionKind): string {
 	return toolNames[kind];
 }
 
+export function workerReadToolName(kind: WorkerSubmissionKind): string {
+	if (kind === "resume_draft") return "read_draft_source";
+	if (kind === "facts_review") return "read_facts_packet";
+	if (kind === "targeted_patch") return "read_editor_packet";
+	if (kind === "requirements") return "read_job_posting";
+	return "read_pipeline_file";
+}
+
 /** Repeated verbatim in every worker context so a JSON chat reply cannot be mistaken for a submission. */
 export function workerSubmissionProtocol(kind: WorkerSubmissionKind): string {
 	const name = submissionToolName(kind);
-	return `\n\nCompletion protocol (mandatory):\n- Do not put the completed artifact in a chat message, Markdown fence, prose response, or file. Chat output is ignored by the coordinator.\n- Your final action in this conversation must be exactly one call to the \`${name}\` tool.\n- Pass one argument object that matches the tool's schema exactly: \`${submissionShapes[kind]}\`. Use the tool's displayed schema for all nested fields and limits.\n- If the tool reports a validation error, fix only that error and call \`${name}\` again. Do not end the conversation until the tool accepts the submission.\n- After the accepted \`${name}\` call, stop; the coordinator persists the artifact.`;
+	const readName = workerReadToolName(kind);
+	const readRetry = readName === "read_pipeline_file"
+		? "- If read_pipeline_file fails, retry only with a path named in that tool's description; never search or guess filenames.\n"
+		: `- Read assigned sources with \`${readName}\`.\n`;
+	return `\n\nCompletion protocol (mandatory):\n- Do not put the completed artifact in a chat message, Markdown fence, or prose response. Chat output is ignored by the coordinator.\n- Your final action in this conversation must be exactly one call to the \`${name}\` tool.\n- Pass one argument object that matches the tool's schema exactly: \`${submissionShapes[kind]}\`. Use the tool's displayed schema for all nested fields and limits.\n- If the tool reports a validation error, fix only that error and call \`${name}\` again. Do not end the conversation until the tool accepts the submission.\n${readRetry}- After the accepted \`${name}\` call, stop; the coordinator persists the artifact.`;
 }
 
 const MAX_WORKER_READ_BYTES = 1024 * 1024;
@@ -142,8 +154,36 @@ export type SubmissionContext = {
 	maxCoverLetterWords?: number;
 	/** Only enforced for resume_draft: a drafter may never move or reword a locked entry. */
 	lockedEntries?: Array<ResumePlan["workExperience"][number] | ResumePlan["projects"][number]>;
+	/** Only enforced for targeted_patch: the coordinator-authorized finding paths. */
+	allowedPatchPaths?: string[];
 };
 export type TargetedPatchSubmission = { patches: Array<{ targetPath: string; replacement: string; evidence: string[] }> };
+export { editablePath };
+function parts(pointer: string): string[] { return pointer.slice(1).split("/").map(part => part.replace(/~1/g, "/").replace(/~0/g, "~")); }
+function setPointer(root: unknown, pointer: string, value: unknown): void {
+	const keys = parts(pointer); const finalKey = keys.pop();
+	if (!finalKey) throw new Error("Patch path cannot be the document root");
+	const parent = keys.reduce<unknown>((node, key) => node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined, root);
+	if (!parent || typeof parent !== "object" || !(finalKey in parent)) throw new Error(`Patch target does not exist: ${pointer}`);
+	(parent as Record<string, unknown>)[finalKey] = value;
+}
+function evidencePath(target: string): string {
+	if (/\/bullets\/\d+\/text$/.test(target)) return target.replace(/\/text$/, "/evidence");
+	if (/^\/skills\/\d+\/(?:label|value)$/.test(target)) return target.replace(/\/(?:label|value)$/, "/evidence");
+	if (/^\/education\/coursework\/items\/\d+$/.test(target)) return "/education/coursework/evidence";
+	throw new Error(`No evidence field for ${target}`);
+}
+/** Coordinator-only authorization boundary for the xhigh editor; also enforced inside the submission tool. */
+export function applyTargetedPatches(plan: ResumePlan, submission: TargetedPatchSubmission, allowedPaths: string[], master: string): ResumePlan {
+	const allowed = new Set(allowedPaths); const patched = structuredClone(plan); const seen = new Set<string>();
+	for (const patch of submission.patches) {
+		if (!allowed.has(patch.targetPath) || !editablePath(patch.targetPath)) throw new Error(`Edit denied. The factual finding applies only to ${allowedPaths.join(", ")}; edits outside that target are not permitted.`);
+		if (seen.has(patch.targetPath)) throw new Error(`Edit denied. Duplicate patch target: ${patch.targetPath}`);
+		seen.add(patch.targetPath); setPointer(patched, patch.targetPath, patch.replacement); setPointer(patched, evidencePath(patch.targetPath), patch.evidence);
+	}
+	if (seen.size !== allowed.size) throw new Error("Edit denied. Submit exactly one patch for every reviewer-authorized finding, or remove/shorten the unsupported claim within that target.");
+	renderPlan(patched); buildLedger(patched, master); return patched;
+}
 
 /** A resume plan has exactly two entry collections; callers that only care about entries (not which heading they render under) can use this. */
 export function planEntries(plan: ResumePlan): Array<ResumePlan["workExperience"][number] | ResumePlan["projects"][number]> {
@@ -155,7 +195,8 @@ function workerReadPaths(kind: WorkerSubmissionKind, context: SubmissionContext)
 	const masterResume = path.join(context.workspace.masterDir, "resume.md");
 	if (kind === "requirements") return inJob("job.md");
 	if (kind === "facts_review") return inJob(".review-packet-facts.json");
-	if (kind === "targeted_patch") return [masterResume, ...inJob("resume-plan.json", "independent-verification.json", "claim-ledger.json", "layout.json")];
+	if (kind === "targeted_patch") return inJob(".review-packet-editor.json");
+	if (kind === "resume_draft") return [masterResume, ...inJob("job-requirement.json")];
 	if (kind === "cover_letter" || kind === "cover_letter_review") {
 		return [
 			masterResume,
@@ -163,11 +204,8 @@ function workerReadPaths(kind: WorkerSubmissionKind, context: SubmissionContext)
 			...(context.workspace.coverLetterDir ? coverLetterSources(context.workspace.coverLetterDir) : []),
 		];
 	}
-	return [
-		masterResume,
-		path.join(context.workspace.templateDir, "resume-template.tex"),
-		...inJob("job-requirement.json", "resume-plan.json", "resume.md", "independent-verification.json", "layout.json", "claim-ledger.json"),
-	];
+	const exhaustive: never = kind;
+	throw new Error(`No read allowlist for worker kind: ${exhaustive}`);
 }
 
 function coverLetterSources(directory: string): string[] {
@@ -182,31 +220,110 @@ function coverLetterSources(directory: string): string[] {
 	return output;
 }
 
+/** Absolute paths this worker role may read; existence is checked at read time. */
+export function assignedReadPaths(kind: WorkerSubmissionKind, context: SubmissionContext): string[] {
+	return workerReadPaths(kind, context);
+}
+
+function readableAssignedPaths(kind: WorkerSubmissionKind, context: SubmissionContext): string[] {
+	return assignedReadPaths(kind, context)
+		.filter(file => {
+			try { return fs.existsSync(file) && fs.statSync(file).isFile(); }
+			catch { return false; }
+		})
+		.map(file => fs.realpathSync(file));
+}
+
+function readAssignedText(filePath: string, source: string): { content: [{ type: "text"; text: string }]; details: { source: string } } {
+	if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) throw new Error("Assigned pipeline file does not exist");
+	const stat = fs.statSync(filePath);
+	if (stat.size > MAX_WORKER_READ_BYTES) throw new Error(`Assigned pipeline file must be a regular text file no larger than ${MAX_WORKER_READ_BYTES} bytes`);
+	const resolved = fs.realpathSync(filePath);
+	return { content: [{ type: "text" as const, text: fs.readFileSync(resolved, "utf8") }], details: { source } };
+}
+
+function createFixedFileReadTool(name: string, description: string, filePath: string): ToolDefinition {
+	return defineTool({
+		name,
+		label: name,
+		description,
+		promptSnippet: description,
+		promptGuidelines: [`Call ${name} once. It returns the only assigned source.`],
+		parameters: Type.Object({}, { additionalProperties: false }),
+		async execute() {
+			return readAssignedText(filePath, name);
+		},
+	}) as ToolDefinition;
+}
+
+function createDrafterReadTool(context: SubmissionContext): ToolDefinition {
+	const sources = {
+		job_brief: path.join(context.folder, "job-requirement.json"),
+		master_resume: path.join(context.workspace.masterDir, "resume.md"),
+	} as const;
+	return defineTool({
+		name: "read_draft_source",
+		label: "read_draft_source",
+		description: "Read one assigned drafting source. The only options are job_brief and master_resume.",
+		promptSnippet: "Read an assigned drafting source",
+		promptGuidelines: ["Call read_draft_source with source job_brief or master_resume."],
+		parameters: Type.Object({
+			source: Type.Union([Type.Literal("job_brief"), Type.Literal("master_resume")]),
+		}, { additionalProperties: false }),
+		async execute(_toolCallId, params) {
+			const source = params.source;
+			if (source !== "job_brief" && source !== "master_resume") throw new Error("source must be job_brief or master_resume");
+			return readAssignedText(sources[source], source);
+		},
+	}) as ToolDefinition;
+}
+
 /** Read access is allowlisted per worker role; job text cannot make a worker explore unrelated files. */
 export function createWorkerReadTool(kind: WorkerSubmissionKind, context: SubmissionContext): ToolDefinition {
-	const allowed = new Set(workerReadPaths(kind, context)
-		.filter(file => fs.existsSync(file) && fs.statSync(file).isFile())
-		.map(file => fs.realpathSync(file)));
+	if (kind === "resume_draft") return createDrafterReadTool(context);
+	if (kind === "facts_review") {
+		return createFixedFileReadTool(
+			"read_facts_packet",
+			"Read the coordinator-built factual-audit packet. This is the only assigned source.",
+			path.join(context.folder, ".review-packet-facts.json"),
+		);
+	}
+	if (kind === "targeted_patch") {
+		return createFixedFileReadTool(
+			"read_editor_packet",
+			"Read the coordinator-built editor packet. This is the only assigned source.",
+			path.join(context.folder, ".review-packet-editor.json"),
+		);
+	}
+	if (kind === "requirements") {
+		return createFixedFileReadTool(
+			"read_job_posting",
+			"Read the saved job posting. This is the only assigned source.",
+			path.join(context.folder, "job.md"),
+		);
+	}
+	const assigned = assignedReadPaths(kind, context);
 	return defineTool({
 		name: "read_pipeline_file",
 		label: "read_pipeline_file",
-		description: "Read one coordinator-assigned text artifact. Other filesystem paths are rejected.",
+		description: `Read one coordinator-assigned text artifact. The only readable paths are: ${assigned.join(", ")}. Other filesystem paths are rejected.`,
 		promptSnippet: "Read an assigned pipeline input",
 		promptGuidelines: ["Use only paths explicitly assigned in the workflow prompt."],
 		parameters: Type.Object({ path: Type.String({ minLength: 1, maxLength: 4096 }) }, { additionalProperties: false }),
 		async execute(_toolCallId, params) {
+			const allowed = new Set(readableAssignedPaths(kind, context));
+			const listed = (allowed.size ? [...allowed] : assigned).join(", ");
 			let requested: string;
 			try { requested = fs.realpathSync(path.resolve(params.path)); }
-			catch { throw new Error("Assigned pipeline file does not exist"); }
-			if (!allowed.has(requested)) throw new Error("Path is outside this worker's assigned read set");
-			const stat = fs.statSync(requested);
-			if (!stat.isFile() || stat.size > MAX_WORKER_READ_BYTES) throw new Error(`Assigned pipeline file must be a regular text file no larger than ${MAX_WORKER_READ_BYTES} bytes`);
-			return { content: [{ type: "text" as const, text: fs.readFileSync(requested, "utf8") }], details: { path: requested } };
+			catch { throw new Error(`Assigned pipeline file does not exist. Readable paths: ${listed}`); }
+			if (!allowed.has(requested)) throw new Error(`Path is outside this worker's assigned read set. Readable paths: ${listed}`);
+			return readAssignedText(requested, "assigned");
 		},
 	}) as ToolDefinition;
 }
 
 function wordCount(value: string): number { return value.trim().split(/\s+/).filter(Boolean).length; }
+export function countWords(value: string): number { return wordCount(value); }
 
 /**
  * Header and fixed education values are candidate-owned facts, not drafting
@@ -359,36 +476,137 @@ function coerceJsonStrings(schema: unknown, value: unknown, path = "", root?: un
 	return result;
 }
 
+/** Acronyms that commonly appear across unrelated bullets and should not trigger the recast check. */
+const GENERIC_ACRONYMS = new Set([
+	"AI", "ML", "NLP", "LLM", "RAG", "API", "AWS", "GCP", "SQL", "GPU", "CPU", "RAM",
+	"HTTP", "HTTPS", "REST", "JSON", "HTML", "CSS", "CLI", "SDK", "OS", "UI", "UX",
+	"CI", "CD", "QA", "DB", "ID", "IO", "IP", "TCP", "UDP", "SSH", "TLS", "SSL",
+	"JWT", "ETL", "DAG", "PDF", "URL", "USB", "SSD", "HPC", "MPC", "RBAC", "OIDC",
+	"SWE", "CS", "USA", "NY", "NJ", "CA", "UK", "EU", "SSE",
+]);
+
+function workEntrySourceBullets(master: string, headingId: string): Array<{ id: string; text: string }> {
+	const section = masterSection(master, "Work Experience");
+	const block = section.split(/^### /m).slice(1).find(part => part.startsWith(`[${headingId}]`));
+	if (!block) return [];
+	return [...block.matchAll(/^[-*]\s+\[([^\]]+)\]\s*(.*)$/gm)].map(match => ({ id: match[1]!, text: match[2] ?? "" }));
+}
+
+function distinctiveTokens(text: string): Set<string> {
+	const tokens = text.match(/\b[A-Z]{2,6}\b|\bC#\b/g) ?? [];
+	return new Set(tokens.filter(token => !GENERIC_ACRONYMS.has(token)));
+}
+
+function normalizeCourseName(name: string): string {
+	return name.replace(/\.+$/, "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+function courseNamesFromBullet(text: string): string[] {
+	const listed = text.match(/:\s*(.*)$/);
+	if (!listed?.[1]) return [];
+	const list = listed[1].replace(/\.+$/, "").trim();
+	const parts = list.includes(";") ? list.split(/\s*;\s*/) : list.split(/,\s*/);
+	return parts.map(part => part.trim()).filter(Boolean);
+}
+function plannedCourseNames(master: string): Set<string> {
+	let education: string;
+	try { education = masterSection(master, "Education"); }
+	catch { return new Set(); }
+	const completed = new Set<string>();
+	const planned = new Set<string>();
+	for (const match of education.matchAll(/^[-*]\s+\[[^\]]+\]\s+(.+)$/gm)) {
+		const text = match[1]!;
+		const names = courseNamesFromBullet(text).map(normalizeCourseName);
+		if (/registered|not yet completed|planned coursework/i.test(text)) {
+			for (const name of names) planned.add(name);
+		} else if (/\bcompleted\b/i.test(text) && /course/i.test(text)) {
+			for (const name of names) completed.add(name);
+		}
+	}
+	return new Set([...planned].filter(name => !completed.has(name)));
+}
+function assertCourseworkIsCompleted(plan: ResumePlan, master: string): void {
+	const blocked = plannedCourseNames(master);
+	if (!blocked.size) return;
+	const forbidden = plan.education.coursework.items.filter(item => blocked.has(normalizeCourseName(item)));
+	if (forbidden.length) {
+		throw new Error(`Coursework includes registered or planned course(s): ${forbidden.join(", ")}. Select only completed courses.`);
+	}
+}
+
+function overusedWorkTopic(entry: ResumePlan["workExperience"][number], sources: Array<{ id: string; text: string }>): string | undefined {
+	if (entry.bullets.length < 3 || sources.length < 3) return undefined;
+	const tokenSets = entry.bullets.map(bullet => distinctiveTokens(bullet.text));
+	const [first, ...rest] = tokenSets;
+	if (!first) return undefined;
+	for (const token of first) {
+		if (!rest.every(set => set.has(token))) continue;
+		const missingFromMaster = sources.some(source => !distinctiveTokens(source.text).has(token) && !source.text.includes(token));
+		if (missingFromMaster) return token;
+	}
+	return undefined;
+}
+
+function assertWorkExperienceSelection(plan: ResumePlan, master: string): void {
+	for (const entry of plan.workExperience) {
+		const headingId = entry.evidence[0];
+		if (!headingId || entry.bullets.length < 3) continue;
+		const sources = workEntrySourceBullets(master, headingId);
+		const topic = overusedWorkTopic(entry, sources);
+		if (topic) {
+			throw new Error(`${entry.title}: every bullet repeats ${topic}, but unused master claims cover other work. Rewrite so each bullet's primary contribution is a different project, system, or outcome; do not recast ${topic} three times.`);
+		}
+	}
+}
+
+function acceptMaterializedDraft(result: ResumePlan, masterText: string, context: SubmissionContext): ResumePlan {
+	assertCourseworkIsCompleted(result, masterText);
+	assertWorkExperienceSelection(result, masterText);
+	renderPlan(result);
+	buildLedger(result, masterText);
+	if (context.lockedEntries?.length) {
+		const entries = planEntries(result);
+		for (const locked of context.lockedEntries) {
+			if (!entries.some(entry => JSON.stringify(entry) === JSON.stringify(locked))) throw new Error(`Drafter changed locked entry: ${locked.title}`);
+		}
+	}
+	return result;
+}
+
 /** Semantic validation runs inside the submission tool and returns errors to the same worker turn. */
 export function validateWorkerSubmission(kind: WorkerSubmissionKind, rawValue: unknown, context: SubmissionContext): unknown {
+	const master = () => readTextFile(path.join(context.workspace.masterDir, "resume.md"));
+	if (kind === "resume_draft" && isResumePlan(rawValue)) {
+		return acceptMaterializedDraft(rawValue, master(), context);
+	}
 	const schema = submissionSchemas[kind] as any;
 	const value = coerceJsonStrings(schema, rawValue);
 	if (!Check(schema, value)) {
 		const first = Errors(schema, value)[0];
 		throw new Error(`Invalid ${kind} submission at ${first?.instancePath || "/"}: ${first?.message || "schema mismatch"}`);
 	}
-	const master = () => readTextFile(path.join(context.workspace.masterDir, "resume.md"));
-	if (kind === "requirements") return validateJobRequirement(value, readTextFile(path.join(context.folder, "job.md")));
+	if (kind === "requirements") {
+		const validated = validateJobRequirement(value, readTextFile(path.join(context.folder, "job.md")));
+		if (validated.job.company !== context.company) throw new Error("job-requirement company must exactly match the assigned company");
+		return validated;
+	}
 	if (kind === "resume_draft") {
 		const submitted = value as ResumePlanInput;
 		const masterText = master();
-		const result = materializeResumePlan(submitted, masterText);
-		renderPlan(result);
-		buildLedger(result, masterText);
-		if (context.lockedEntries?.length) {
-			const entries = planEntries(result);
-			for (const locked of context.lockedEntries) {
-				if (!entries.some(entry => JSON.stringify(entry) === JSON.stringify(locked))) throw new Error(`Drafter changed locked entry: ${locked.title}`);
-			}
-		}
-		return result;
+		return acceptMaterializedDraft(materializeResumePlan(submitted, masterText), masterText, context);
 	}
 	if (kind === "facts_review") {
 		const plan = readJsonFile<ResumePlan>(path.join(context.folder, "resume-plan.json"));
 		const ledger = factualAuditLedger(reviewLedger(buildLedger(plan, master()), master()));
 		return validateFactualReview(value, ledger);
 	}
-	if (kind === "targeted_patch") return value as TargetedPatchSubmission;
+	if (kind === "targeted_patch") {
+		const patch = value as TargetedPatchSubmission;
+		if (context.allowedPatchPaths) {
+			const plan = readJsonFile<ResumePlan>(path.join(context.folder, "resume-plan.json"));
+			applyTargetedPatches(plan, patch, context.allowedPatchPaths, master());
+		}
+		return patch;
+	}
 	if (kind === "cover_letter") {
 		const result = value as { text: string };
 		const count = wordCount(result.text);
@@ -415,7 +633,7 @@ export function createWorkerSubmissionTool(kind: WorkerSubmissionKind, context: 
 		label: name,
 		description: "Submit the completed artifact. Invalid schema or semantic content is rejected immediately; correct the arguments and call this tool again.",
 		promptSnippet: `Submit the completed artifact with ${name}`,
-		promptGuidelines: [`Use ${name} as the final action. You cannot write or edit files directly.`],
+		promptGuidelines: [`Use ${name} as the final action. The coordinator persists the artifact after this tool accepts it.`],
 		// Loosened only so the runtime's pre-execute check tolerates a
 		// double-serialized nested field; validateWorkerSubmission below
 		// still enforces the real, strict schema on every submission.
@@ -428,7 +646,7 @@ export function createWorkerSubmissionTool(kind: WorkerSubmissionKind, context: 
 				persistResumeDraft(context.folder, draft, master);
 				const rendered = await renderResume(context.workspace, context.folder);
 				if (!rendered.passed) {
-					throw new Error(`Measured PDF layout findings: ${rendered.warnings.join("; ")}. Correct only what these findings require, then call ${name} again.`);
+					throw new Error(`Measured PDF layout findings: ${rendered.warnings.join("; ")}. Do not call read_draft_source; reuse the plan you just submitted. Change only what these findings require, then call ${name} again with a complete plan that still includes coursework, skills, workExperience, and projects.`);
 				}
 			}
 			submission = value;
@@ -452,7 +670,7 @@ function renderResumeMarkdown(plan: ResumePlan): string {
 	if (plan.education.honors.items.length) lines.push(`- Honors / Awards: ${plan.education.honors.items.join(", ")}`);
 	if (plan.education.coursework.items.length) lines.push(`- Coursework: ${plan.education.coursework.items.join(", ")}`);
 	lines.push("", "## Technical Skills", ...plan.skills.map(skill => `- ${skill.label}: ${skill.value}`));
-	lines.push("", "## Work Experience");
+	lines.push("", "## Professional Work Experience");
 	for (const item of plan.workExperience) {
 		lines.push(`### ${item.title}${item.dates ? ` — ${item.dates}` : ""}`, [item.subtitle, item.location].filter(Boolean).join(" — "), ...item.bullets.map(point => `- ${point.text}`));
 	}

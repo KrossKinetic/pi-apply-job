@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { LayoutReport } from "./schemas.js";
 import type { ResumePlan } from "./schemas.js";
-import { checkStructure, inspectPdf } from "./layout-qa.js";
+import { checkStructure, inspectPdf, workBulletCountsFor } from "./layout-qa.js";
 import { type ApplyJobWorkspace, masterFilePath, readJsonFile, readTextFile, templateFilePath, updateMetadata, writeJsonFile, writeTextFile } from "./utils.js";
 
 const execFileP = promisify(execFile);
@@ -77,6 +77,37 @@ function escapeLatex(value: string): string {
 		.replace(/>/g, "\\textgreater{}")
 		.replace(/[–—]/g, "--");
 }
+function escapeHref(url: string): string {
+	return url.replace(/([#%\\])/g, "\\$1");
+}
+type ContactPart = { icon: string; display: string; href?: string };
+function parseContactParts(contactLine: string): ContactPart[] {
+	return contactLine.split(/\s*\|\s*/).map(part => part.trim()).filter(Boolean).map(part => {
+		const labeled = part.match(/^([^:]+):\s*(.+)$/);
+		const label = (labeled?.[1] || "").toLowerCase();
+		const value = labeled?.[2] || part;
+		if (label.includes("phone") || /^\+?\d/.test(value.replace(/[\s().-]/g, ""))) return { icon: "\\faPhone", display: value };
+		if (label.includes("email") || value.includes("@")) return { icon: "\\faEnvelope", display: value.replace(/^mailto:/i, ""), href: "mailto:" + value.replace(/^mailto:/i, "") };
+		if (label.includes("linkedin") || /linkedin\.com/i.test(value)) {
+			const href = value.startsWith("http") ? value : `https://${value.replace(/^\/+/, "")}`;
+			return { icon: "\\faLinkedin", display: href.replace(/^https?:\/\/(www\.)?/i, ""), href };
+		}
+		if (label.includes("github") || /github\.com/i.test(value)) {
+			const href = value.startsWith("http") ? value : `https://${value.replace(/^\/+/, "")}`;
+			return { icon: "\\faGithub", display: href.replace(/^https?:\/\/(www\.)?/i, ""), href };
+		}
+		const href = value.startsWith("http") ? value : undefined;
+		return { icon: "\\faBriefcase", display: href ? href.replace(/^https?:\/\/(www\.)?/i, "") : value, href };
+	});
+}
+function renderContactRow(parts: ContactPart[]): string {
+	return parts.map(part => {
+		const body = part.href
+			? `${part.icon}\\ \\href{${escapeHref(part.href)}}{${escapeLatex(part.display)}}`
+			: `${part.icon}\\ \\underline{${escapeLatex(part.display)}}`;
+		return `{${body}}`;
+	}).join(" ~\n    ");
+}
 
 function stripRepeatedGpa(degree: string, gpa: string): string {
 	if (!gpa) return degree;
@@ -90,7 +121,7 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 	const plan = object(value, "resume-plan.json");
 	const header = object(plan.header, "header");
 	const name = text(header.name, "header.name");
-	const headline = text(header.headline, "header.headline", true);
+	text(header.headline, "header.headline", true);
 	const contactLine = text(header.contactLine, "header.contactLine");
 	sourceIds(header.evidence, "header.evidence");
 	const education = object(plan.education, "education");
@@ -107,27 +138,17 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 	const coursework = object(education.coursework, "education.coursework");
 	const courseworkItems = textItems(coursework.items, "education.coursework.items", 8);
 	if (courseworkItems.length) sourceIds(coursework.evidence, "education.coursework.evidence");
-	if (!Array.isArray(plan.skills) || plan.skills.length < 2 || plan.skills.length > 3) {
-		throw new Error("skills must contain 2–3 categories");
+	if (!Array.isArray(plan.skills) || plan.skills.length < 1 || plan.skills.length > 3) {
+		throw new Error("skills must contain 1–3 categories");
 	}
 	const skillLines = plan.skills.map((rawSkill) => {
 		const skill = object(rawSkill, "skill");
 		sourceIds(skill.evidence, "skill.evidence");
-		return "\\piSkillLine{\\textbf{" + escapeLatex(text(skill.label, "skill.label")) + "}: " + escapeLatex(text(skill.value, "skill.value")) + "}";
-	}).join("\n");
-	// The renderer, not the worker, owns the fixed "Work Experience" and
-	// "Projects" headings and their order: there is no free-text section title
-	// left in the contract for a duplicate, misnamed, or misordered heading.
-	if (!Array.isArray(plan.workExperience) || plan.workExperience.length < 3) {
-		throw new Error("workExperience must contain at least 3 entries");
-	}
-	if (!Array.isArray(plan.projects)) throw new Error("projects must be an array");
-	if (plan.workExperience.length + plan.projects.length !== 5) {
-		throw new Error("workExperience and projects must contain exactly 5 entries in total");
-	}
-	const bulletsTex = (rawBullets: unknown, label: string, minItems: number, maxItems: number) => {
-		if (!Array.isArray(rawBullets) || rawBullets.length < minItems || rawBullets.length > maxItems) {
-			throw new Error(`${label} must contain ${minItems === maxItems ? `exactly ${minItems}` : `${minItems}–${maxItems}`} bullet(s)`);
+		return "\\textbf{" + escapeLatex(text(skill.label, "skill.label")) + "}{: " + escapeLatex(text(skill.value, "skill.value")) + "}";
+	}).join(" \\\\[1mm]\n   ");
+	const bulletsTex = (rawBullets: unknown, label: string, count: number) => {
+		if (!Array.isArray(rawBullets) || rawBullets.length !== count) {
+			throw new Error(`${label} must contain exactly ${count} bullet(s)`);
 		}
 		return rawBullets.map((rawBullet, bulletIndex) => {
 			const bullet = object(rawBullet, `${label}[${bulletIndex}]`);
@@ -135,7 +156,8 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 			return "  \\resumeItem{" + escapeLatex(text(bullet.text, `${label}[${bulletIndex}].text`)) + "}";
 		}).join("\n");
 	};
-	const workEntries = plan.workExperience.map((rawEntry, index) => {
+	const workCounts = workBulletCountsFor({ workExperience: plan.workExperience as ResumePlan["workExperience"] });
+	const workEntries = (plan.workExperience as unknown[]).map((rawEntry, index) => {
 		const label = `workExperience[${index}]`;
 		const entry = object(rawEntry, label);
 		const titleText = escapeLatex(text(entry.title, `${label}.title`));
@@ -143,38 +165,46 @@ export function renderPlan(value: unknown): { header: string; content: string } 
 		const subtitle = escapeLatex(text(entry.subtitle, `${label}.subtitle`));
 		const location = escapeLatex(text(entry.location, `${label}.location`));
 		sourceIds(entry.evidence, `${label}.evidence`);
-		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, 2, 3);
+		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, workCounts[index]!);
 		const heading = "\\resumeSubheading{" + titleText + "}{" + dates + "}{" + subtitle + "}{" + location + "}";
 		return heading + "\n\\resumeItemListStart\n" + bullets + "\n\\resumeItemListEnd";
-	}).join("\n\\vspace{2pt}\n");
-	const workSection = "\\section{Work Experience}\n\\resumeSubHeadingListStart\n" + workEntries + "\n\\resumeSubHeadingListEnd";
-	const projectEntries = plan.projects.map((rawEntry, index) => {
+	}).join("\n");
+	const workSection = "\\section{Professional Work Experience}\n\\resumeSubHeadingListStart\n" + workEntries + "\n\\resumeSubHeadingListEnd";
+	const projectEntries = (plan.projects as unknown[]).map((rawEntry, index) => {
 		const label = `projects[${index}]`;
 		const entry = object(rawEntry, label);
 		const titleText = escapeLatex(text(entry.title, `${label}.title`));
 		const dates = escapeLatex(text(entry.dates, `${label}.dates`, true));
 		sourceIds(entry.evidence, `${label}.evidence`);
-		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, 1, 1);
+		const bullets = bulletsTex(entry.bullets, `${label}.bullets`, 1);
 		const heading = "\\resumeProjectHeading{\\textbf{" + titleText + "}}{" + dates + "}";
 		return heading + "\n\\resumeItemListStart\n" + bullets + "\n\\resumeItemListEnd";
-	}).join("\n\\vspace{2pt}\n");
-	const projectsSection = plan.projects.length
-		? "\\section{Projects}\n\\resumeSubHeadingListStart\n" + projectEntries + "\n\\resumeSubHeadingListEnd"
-		: "";
-	const sections = [workSection, projectsSection].filter(Boolean);
-
-	const title = headline ? escapeLatex(name) + " --- " + escapeLatex(headline) : escapeLatex(name);
-	const educationBullets = [
-		honorItems.length > 0 ? "  \\resumeItem{\\textbf{Honors / Awards}: " + honorItems.map(escapeLatex).join(", ") + "}" : "",
-		courseworkItems.length > 0 ? "  \\resumeItem{\\textbf{Coursework}: " + courseworkItems.map(escapeLatex).join(", ") + "}" : "",
+	}).join("\n");
+	const projectsSection = "\\section{Projects}\n\\resumeSubHeadingListStart\n" + projectEntries + "\n\\resumeSubHeadingListEnd";
+	const degreeLine = degree + (gpa ? " --- GPA: " + gpa : "");
+	const educationRows = [
+		"      \\textbf{" + institution + "} & \\textbf{\\small " + educationDates + "} \\\\",
+		"      \\textit{\\small " + degreeLine + "} & \\textit{\\small " + educationLocation + "} \\\\[1mm]",
+		honorItems.length ? "      \\multicolumn{2}{p{\\linewidth}}{\\small\\textbf{Honors / Awards}{: " + honorItems.map(escapeLatex).join(", ") + "}} \\\\[1mm]" : "",
+		courseworkItems.length ? "      \\multicolumn{2}{p{\\linewidth}}{\\small\\textbf{Relevant Coursework}{: " + courseworkItems.map(escapeLatex).join(", ") + "}}" : "",
 	].filter(Boolean).join("\n");
-	const educationContent = "\\section{Education}\n\\resumeSubHeadingListStart\n\\resumeSubheading{" + institution + "}{" + educationDates + "}{" + degree + (gpa ? " -- GPA: " + gpa : "") + "}{" + educationLocation + "}\n" + (educationBullets ? "\\resumeItemListStart\n" + educationBullets + "\n\\resumeItemListEnd\n" : "") + "\\resumeSubHeadingListEnd";
-	const skillMacro = "\\newsavebox{\\piSkillLineBox}\n\\newcommand{\\piSkillLine}[1]{\\sbox{\\piSkillLineBox}{\\small #1}\\ifdim\\wd\\piSkillLineBox>\\textwidth\\typeout{PI-SKILLS-OVERFLOW}\\fi{\\small #1}\\par}";
-	const skillContent = skillMacro + "\n\\section{Technical Skills}\n\\noindent\n" + skillLines;
-	return {
-		header: "\\begin{center}\n  {\\Large \\scshape " + title + "} \\\\[1.5mm]\n  \\footnotesize " + escapeLatex(contactLine) + "\n\\end{center}\n\\vspace{3pt}",
-		content: [educationContent, skillContent, ...sections].join("\n\\vspace{3pt}\n"),
-	};
+	const educationContent = "\\resumeSubHeadingListStart\n    \\vspace{-10pt}\\item\n    \\begin{tabular*}{1.0\\textwidth}[t]{l@{\\extracolsep{\\fill}}r}\n" + educationRows + "\n    \\end{tabular*}\\vspace{-8pt}\n\\resumeSubHeadingListEnd";
+	const skillContent = "\\section{Technical Skills}\n\\begin{itemize}[leftmargin=0.15in, label={}]\n  \\small{\\item{\n   " + skillLines + "\n  }}\n\\end{itemize}";
+	const contacts = parseContactParts(contactLine);
+	const primary = contacts.filter(part => part.icon === "\\faPhone" || part.icon === "\\faEnvelope");
+	const social = contacts.filter(part => part.icon !== "\\faPhone" && part.icon !== "\\faEnvelope");
+	const firstRow = renderContactRow(primary.length ? primary : contacts);
+	const secondRow = primary.length ? renderContactRow(social) : "";
+	const headerTex = [
+		"\\begin{center}",
+		"    {\\Large \\scshape " + escapeLatex(name) + "} \\\\[2mm]",
+		"    \\footnotesize",
+		"    " + firstRow,
+		"\\end{center}",
+		secondRow ? "\\begin{center}\n    " + secondRow + "\n    \\vspace{-8pt}\n\\end{center}" : "\\vspace{-8pt}",
+		"\\hrulefill",
+	].join("\n");
+	return { header: headerTex, content: [educationContent, skillContent, workSection, projectsSection].join("\n") };
 }
 
 function resolveJobFolder(workspace: ApplyJobWorkspace, requested: string): string {

@@ -144,11 +144,18 @@ export function reviewLedger(ledger: Ledger, master: string): Ledger {
   return { ...ledger, availableSources: [...sourceInventory(master).values()] };
 }
 
-/** Header and fixed education facts are coordinator-copied from the master; the factual auditor only sees drafter-owned sections. */
-const factualAuditPrefixes = ["/education/coursework", "/skills", "/workExperience", "/projects"];
+/** Drafter-owned leaf fields the Low auditor may flag and the xhigh editor may patch. */
+export function editablePath(pointer: string): boolean {
+  return /^\/education\/coursework\/items\/\d+$/.test(pointer)
+    || /^\/skills\/\d+\/(?:label|value)$/.test(pointer)
+    || /^\/workExperience\/\d+\/bullets\/\d+\/text$/.test(pointer)
+    || /^\/projects\/\d+\/bullets\/\d+\/text$/.test(pointer);
+}
+
+/** Header, honors, and coordinator-copied titles/dates/employers are not in the factual-audit lane. */
 export function factualAuditLedger(ledger: Ledger): Ledger {
   return {
     ...ledger,
-    claims: ledger.claims.filter(claim => factualAuditPrefixes.some(prefix => claim.path === prefix || claim.path.startsWith(`${prefix}/`))),
+    claims: ledger.claims.filter(claim => editablePath(claim.path)),
   };
 }
